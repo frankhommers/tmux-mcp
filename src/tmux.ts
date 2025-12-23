@@ -247,18 +247,32 @@ export async function killPane(paneId: string): Promise<void> {
   await executeTmux(['kill-pane', '-t', paneId]);
 }
 
-/**
- * Move a window to a different index within the same session
- */
-export async function moveWindow(windowId: string, targetIndex: number): Promise<void> {
-  await executeTmux(`move-window -t '${targetIndex}' -s '${windowId}'`);
+export interface MoveWindowOptions {
+  source?: string;
+  destination?: string;
+  after?: boolean;
+  before?: boolean;
+  renumber?: boolean;
+  detached?: boolean;
+  kill?: boolean;
 }
 
 /**
- * Move a window to another session
+ * Move a window to a different index or session
  */
-export async function moveWindowToSession(windowId: string, targetSessionId: string): Promise<void> {
-  await executeTmux(`move-window -t '${targetSessionId}' -s '${windowId}'`);
+export async function moveWindow(options: MoveWindowOptions): Promise<void> {
+  let command = 'move-window';
+
+  if (options.after) command += ' -a';
+  if (options.before) command += ' -b';
+  if (options.renumber) command += ' -r';
+  if (options.detached) command += ' -d';
+  if (options.kill) command += ' -k';
+
+  if (options.source) command += ` -s '${options.source}'`;
+  if (options.destination) command += ` -t '${options.destination}'`;
+
+  await executeTmux(command);
 }
 
 /**
