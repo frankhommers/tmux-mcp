@@ -439,6 +439,64 @@ server.tool(
   }
 );
 
+// Move window to another session - Tool
+server.tool(
+  "move-window",
+  "Move a tmux window to a different index within the same session",
+  {
+    windowId: z.string().describe("ID of the tmux window to move"),
+    targetIndex: z.number().describe("Target index (number) for the window position in the session")
+  },
+  async ({ windowId, targetIndex }) => {
+    try {
+      await tmux.moveWindow(windowId, targetIndex);
+      return {
+        content: [{
+          type: "text",
+          text: `Window ${windowId} moved to index ${targetIndex}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `Error moving window: ${error}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Move window to another session - Tool
+server.tool(
+  "move-window-to-session",
+  "Move a tmux window to another session",
+  {
+    windowId: z.string().describe("ID of the tmux window to move"),
+    targetSessionId: z.string().describe("ID of the target tmux session")
+  },
+  async ({ windowId, targetSessionId }) => {
+    try {
+      await tmux.moveWindowToSession(windowId, targetSessionId);
+      return {
+        content: [{
+          type: "text",
+          text: `Window ${windowId} moved to session ${targetSessionId}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `Error moving window: ${error}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
 // Execute command in pane - Tool
 server.tool(
   "execute-command",

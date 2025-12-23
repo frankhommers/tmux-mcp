@@ -248,6 +248,20 @@ export async function killPane(paneId: string): Promise<void> {
 }
 
 /**
+ * Move a window to a different index within the same session
+ */
+export async function moveWindow(windowId: string, targetIndex: number): Promise<void> {
+  await executeTmux(`move-window -t '${targetIndex}' -s '${windowId}'`);
+}
+
+/**
+ * Move a window to another session
+ */
+export async function moveWindowToSession(windowId: string, targetSessionId: string): Promise<void> {
+  await executeTmux(`move-window -t '${targetSessionId}' -s '${windowId}'`);
+}
+
+/**
  * Split a tmux pane horizontally or vertically
  */
 export async function splitPane(
