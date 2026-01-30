@@ -286,24 +286,26 @@ const endMarkerPrefix = "TMUX_MCP_DONE_";
 export async function executeCommand(paneId: string, command: string, rawMode?: boolean, noEnter?: boolean): Promise<string> {
   // Generate unique ID for this command execution
   const commandId = uuidv4();
-
-  let fullCommand: string;
-  if (rawMode || noEnter) {
-    fullCommand = command;
-  } else {
-    const endMarkerText = getEndMarkerText();
-    fullCommand = `echo "${startMarkerText}"; ${command}; echo "${endMarkerText}"`;
-  }
-
-  // Store command in tracking map
-  activeCommands.set(commandId, {
+  const commandExec: CommandExecution = {
     id: commandId,
     paneId,
     command,
     status: 'pending',
     startTime: new Date(),
     rawMode: rawMode || noEnter
-  });
+  }
+
+   // Store command in tracking map
+  activeCommands.set(commandId, commandExec);
+
+  let fullCommand: string;
+  if (rawMode || noEnter) {
+    fullCommand = command;
+  } else {
+    const startMarkerText = getStartMarkerText(commandExec)
+    const endMarkerText = getEndMarkerText(commandExec);
+    fullCommand = `echo "${startMarkerText}"; ${command}; echo "${endMarkerText}"`;
+  }
 
   // Send the command to the tmux pane
   if (noEnter) {
@@ -339,12 +341,15 @@ export async function checkCommandStatus(commandId: string): Promise<CommandExec
 
   if (command.status !== 'pending') return command;
 
-  const content = await capturePaneContent(command.paneId, 1000);
+  const content = await capturePaneContent(command.paneId, 3000);
 
   if (command.rawMode) {
     command.result = 'Status tracking unavailable for rawMode commands. Use capture-pane to monitor interactive apps instead.';
     return command;
   }
+
+  const startMarkerText = getStartMarkerText(command)
+  const endMarkerPrefix = getEndMarkerPrefix(command)
 
   // Find the last occurrence of the markers
   const startIndex = content.lastIndexOf(startMarkerText);
@@ -402,10 +407,18 @@ export function cleanupOldCommands(maxAgeMinutes: number = 60): void {
   }
 }
 
-function getEndMarkerText(): string {
+function getStartMarkerText(command: CommandExecution): string {
+  return `${startMarkerText}_${command.id.slice(0, 8)}`;
+}
+
+function getEndMarkerPrefix(command: CommandExecution): string {
+  return `${endMarkerPrefix}${command.id.slice(0, 8)}_`;
+}
+
+function getEndMarkerText(command: CommandExecution): string {
   return shellConfig.type === 'fish'
-    ? `${endMarkerPrefix}$status`
-    : `${endMarkerPrefix}$?`;
+    ? `${getEndMarkerPrefix(command)}$status`
+    : `${getEndMarkerPrefix(command)}$?`;
 }
 
 // --- OSC 133 Capture Tools ---
