@@ -373,9 +373,13 @@ export async function checkCommandStatus(commandId: string): Promise<CommandExec
 
     // Extract output between the start and end markers
     const outputStart = startIndex + startMarkerText.length;
-    const outputContent = content.substring(outputStart, endIndex).trim();
+    const outputContent = content.substring(outputStart, endIndex);
 
-    command.result = outputContent.substring(outputContent.indexOf('\n') + 1).trim();
+    // Skip the first newline after the start marker if present, then trim
+    const firstNewlineIndex = outputContent.indexOf('\n');
+    command.result = firstNewlineIndex !== -1 
+      ? outputContent.substring(firstNewlineIndex + 1).trim()
+      : outputContent.trim();
 
     // Update in map
     activeCommands.set(commandId, command);
