@@ -855,9 +855,9 @@ async function main() {
       type: values['shell-type'] as string
     });
 
-    // Initialize scope
+    // Initialize scope mode (session is resolved lazily on first tool use)
     const scopeValue = values['scope'] ?? process.env.TMUX_MCP_SCOPE ?? 'none';
-    await initScope(scopeValue);
+    initScope(scopeValue);
 
     // Start the MCP server
     const transport = new StdioServerTransport();

@@ -3,26 +3,34 @@ import { executeTmux } from "./tmux.js";
 type ScopeMode = 'none' | 'session';
 
 let scopeMode: ScopeMode = 'none';
+let scopeResolved = false;
 const allowedSessionIds = new Set<string>();
 
 /**
- * Initialize scope. Call once at startup.
- * When mode is 'session', detects the current tmux session from $TMUX env var.
- * Throws if mode is 'session' but no session can be detected.
+ * Initialize scope mode. Call once at startup.
+ * Does NOT detect the session yet — that happens lazily on first tool use.
+ * This way the server always starts successfully (tools can be fetched, etc.).
  */
-export async function initScope(mode: string): Promise<void> {
+export function initScope(mode: string): void {
   if (mode !== 'none' && mode !== 'session') {
     throw new Error(`Invalid scope mode: "${mode}". Valid values: none, session`);
   }
   scopeMode = mode as ScopeMode;
+}
 
-  if (scopeMode === 'none') return;
+/**
+ * Lazily resolve the allowed session. Called on first tool use when scope is active.
+ * Tries to detect the current tmux session from $TMUX env var.
+ * If $TMUX is not set, throws a clear error at tool-use time (not at startup).
+ */
+async function ensureScopeResolved(): Promise<void> {
+  if (scopeMode === 'none' || scopeResolved) return;
 
   const tmuxEnv = process.env.TMUX;
   if (!tmuxEnv) {
     throw new Error(
-      'Scope "session" requires running inside tmux, but $TMUX is not set. ' +
-      'Either run the MCP server inside a tmux pane, or use --scope=none.'
+      'Scope "session" is active but $TMUX is not set. ' +
+      'The MCP server must be running inside a tmux pane for session scoping to work.'
     );
   }
 
@@ -32,6 +40,7 @@ export async function initScope(mode: string): Promise<void> {
       throw new Error('Could not determine current tmux session ID.');
     }
     allowedSessionIds.add(sessionId);
+    scopeResolved = true;
   } catch (error: any) {
     throw new Error(`Failed to detect tmux session for scoping: ${error.message}`);
   }
@@ -47,9 +56,12 @@ export function isScopeActive(): boolean {
 /**
  * Check if a resource is within the allowed scope.
  * When scope is 'none', always returns true.
+ * Triggers lazy session resolution on first call.
  */
 export async function isInScope(id: string, type: 'pane' | 'window' | 'session'): Promise<boolean> {
   if (scopeMode === 'none') return true;
+
+  await ensureScopeResolved();
 
   try {
     let sessionId: string;
@@ -66,6 +78,7 @@ export async function isInScope(id: string, type: 'pane' | 'window' | 'session')
 
 /**
  * Assert a resource is in scope. Throws if not.
+ * Triggers lazy session resolution on first call.
  */
 export async function assertInScope(id: string, type: 'pane' | 'window' | 'session'): Promise<void> {
   if (!(await isInScope(id, type))) {
