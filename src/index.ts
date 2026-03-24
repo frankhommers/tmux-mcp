@@ -31,7 +31,14 @@ server.tool(
   {},
   async () => {
     try {
-      const sessions = await tmux.listSessions();
+      let sessions = await tmux.listSessions();
+      if (isScopeActive()) {
+        const filtered = [];
+        for (const s of sessions) {
+          if (await isInScope(s.id, 'session')) filtered.push(s);
+        }
+        sessions = filtered;
+      }
       return {
         content: [{
           type: "text",
@@ -660,7 +667,14 @@ server.resource(
   "tmux://sessions",
   async () => {
     try {
-      const sessions = await tmux.listSessions();
+      let sessions = await tmux.listSessions();
+      if (isScopeActive()) {
+        const filtered = [];
+        for (const s of sessions) {
+          if (await isInScope(s.id, 'session')) filtered.push(s);
+        }
+        sessions = filtered;
+      }
       return {
         contents: [{
           uri: "tmux://sessions",
@@ -690,7 +704,14 @@ server.resource(
     list: async () => {
       try {
         // Get all sessions
-        const sessions = await tmux.listSessions();
+        let sessions = await tmux.listSessions();
+        if (isScopeActive()) {
+          const filtered = [];
+          for (const s of sessions) {
+            if (await isInScope(s.id, 'session')) filtered.push(s);
+          }
+          sessions = filtered;
+        }
         const paneResources = [];
 
         // For each session, get all windows
