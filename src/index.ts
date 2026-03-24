@@ -50,6 +50,7 @@ server.tool(
 );
 
 // Find session by name - Tool
+// @ts-expect-error - MCP SDK >=1.25 deep type instantiation with many tool registrations
 server.tool(
   "find-session",
   "Find a tmux session by name",
@@ -406,6 +407,7 @@ server.tool(
 );
 
 // Split pane - Tool
+// @ts-expect-error - MCP SDK >=1.25 deep type instantiation with many tool registrations
 server.tool(
   "split-pane",
   "Split a tmux pane horizontally or vertically",

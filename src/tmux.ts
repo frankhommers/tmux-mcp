@@ -130,7 +130,7 @@ export async function getCurrentSession(): Promise<TmuxSession | null> {
 
   // Fallback: try tmux display-message (works if running inside tmux)
   try {
-    const sessionName = await executeTmux("display-message -p '#S'");
+    const sessionName = await executeTmux(['display-message', '-p', '#S']);
     if (sessionName) {
       const sessions = await listSessions();
       return sessions.find(s => s.name === sessionName) || null;
@@ -166,14 +166,14 @@ export async function listWindows(sessionId: string): Promise<TmuxWindow[]> {
  * Rename a window
  */
 export async function renameWindow(windowId: string, newName: string): Promise<void> {
-  await executeTmux(`rename-window -t '${windowId}' '${newName.replace(/'/g, "'\\''")}'`);
+  await executeTmux(['rename-window', '-t', windowId, newName]);
 }
 
 /**
  * Rename a pane (set pane title)
  */
 export async function renamePane(paneId: string, newTitle: string): Promise<void> {
-  await executeTmux(`select-pane -t '${paneId}' -T '${newTitle.replace(/'/g, "'\\''")}'`);
+  await executeTmux(['select-pane', '-t', paneId, '-T', newTitle]);
 }
 
 /**
@@ -424,31 +424,34 @@ async function captureWithOSC133(paneId: string, n: number, mode: CaptureMode): 
   try {
     // Cancel any leftover copy mode from a previous call
     try {
-      await executeTmux(`send-keys -X -t '${paneId}' cancel`);
+      await executeTmux(['send-keys', '-X', '-t', paneId, 'cancel']);
     } catch {
       // not in copy mode, that's fine
     }
 
     // Enter copy mode
-    await executeTmux(`copy-mode -t '${paneId}'`);
+    await executeTmux(['copy-mode', '-t', paneId]);
 
     // Record cursor position to detect whether marks exist
     const initialPos = await executeTmux(
-      `display-message -p -t '${paneId}' '#{copy_cursor_x},#{copy_cursor_y}'`
+      ['display-message', '-p', '-t', paneId, '#{copy_cursor_x},#{copy_cursor_y}']
     );
 
     // Navigate to the start of the selection
-    const startCmd = mode === 'output' ? 'previous-prompt -o' : 'previous-prompt';
+    const startCmd = mode === 'output' ? 'previous-prompt' : 'previous-prompt';
+    const startArgs = mode === 'output'
+      ? ['send-keys', '-X', '-t', paneId, startCmd, '-o']
+      : ['send-keys', '-X', '-t', paneId, startCmd];
     for (let i = 0; i < n; i++) {
-      await executeTmux(`send-keys -X -t '${paneId}' ${startCmd}`);
+      await executeTmux(startArgs);
     }
 
     // Verify cursor moved — if not, there are no OSC 133 marks
     const afterNavPos = await executeTmux(
-      `display-message -p -t '${paneId}' '#{copy_cursor_x},#{copy_cursor_y}'`
+      ['display-message', '-p', '-t', paneId, '#{copy_cursor_x},#{copy_cursor_y}']
     );
     if (initialPos === afterNavPos) {
-      await executeTmux(`send-keys -X -t '${paneId}' cancel`);
+      await executeTmux(['send-keys', '-X', '-t', paneId, 'cancel']);
       throw new Error(
         `No OSC 133 prompt marks found in pane ${paneId}. ` +
         `Cursor stayed at ${initialPos} after ${startCmd}. ` +
@@ -457,26 +460,28 @@ async function captureWithOSC133(paneId: string, n: number, mode: CaptureMode): 
     }
 
     // Begin selection
-    await executeTmux(`send-keys -X -t '${paneId}' begin-selection`);
+    await executeTmux(['send-keys', '-X', '-t', paneId, 'begin-selection']);
 
     // Navigate to the end of the selection
-    const endCmd = mode === 'command' ? 'next-prompt -o' : 'next-prompt';
-    await executeTmux(`send-keys -X -t '${paneId}' ${endCmd}`);
+    const endArgs = mode === 'command'
+      ? ['send-keys', '-X', '-t', paneId, 'next-prompt', '-o']
+      : ['send-keys', '-X', '-t', paneId, 'next-prompt'];
+    await executeTmux(endArgs);
 
     // Adjust selection: next-prompt/next-prompt -o lands ON the mark character,
     // which gets included in the selection. Step back one character to exclude it.
-    await executeTmux(`send-keys -X -t '${paneId}' cursor-left`);
+    await executeTmux(['send-keys', '-X', '-t', paneId, 'cursor-left']);
 
     // Copy selection and exit copy mode (uses default paste buffer)
-    await executeTmux(`send-keys -X -t '${paneId}' copy-selection-and-cancel`);
+    await executeTmux(['send-keys', '-X', '-t', paneId, 'copy-selection-and-cancel']);
 
     // Read the captured content
-    const result = await executeTmux('show-buffer');
+    const result = await executeTmux(['show-buffer']);
     return result;
   } catch (error: any) {
     // Best-effort exit from copy mode on failure
     try {
-      await executeTmux(`send-keys -X -t '${paneId}' cancel`);
+      await executeTmux(['send-keys', '-X', '-t', paneId, 'cancel']);
     } catch {
       // ignore cleanup errors
     }
@@ -511,27 +516,27 @@ export async function captureLastCommand(paneId: string, n: number = 1): Promise
   try {
     // Cancel any leftover copy mode from a previous call
     try {
-      await executeTmux(`send-keys -X -t '${paneId}' cancel`);
+      await executeTmux(['send-keys', '-X', '-t', paneId, 'cancel']);
     } catch {
       // not in copy mode, that's fine
     }
 
-    await executeTmux(`copy-mode -t '${paneId}'`);
+    await executeTmux(['copy-mode', '-t', paneId]);
 
     const initialPos = await executeTmux(
-      `display-message -p -t '${paneId}' '#{copy_cursor_x},#{copy_cursor_y}'`
+      ['display-message', '-p', '-t', paneId, '#{copy_cursor_x},#{copy_cursor_y}']
     );
 
     // Navigate to the output start (C mark) of the Nth command
     for (let i = 0; i < n; i++) {
-      await executeTmux(`send-keys -X -t '${paneId}' previous-prompt -o`);
+      await executeTmux(['send-keys', '-X', '-t', paneId, 'previous-prompt', '-o']);
     }
 
     const afterNavPos = await executeTmux(
-      `display-message -p -t '${paneId}' '#{copy_cursor_x},#{copy_cursor_y}'`
+      ['display-message', '-p', '-t', paneId, '#{copy_cursor_x},#{copy_cursor_y}']
     );
     if (initialPos === afterNavPos) {
-      await executeTmux(`send-keys -X -t '${paneId}' cancel`);
+      await executeTmux(['send-keys', '-X', '-t', paneId, 'cancel']);
       throw new Error(
         `No OSC 133 prompt marks found in pane ${paneId}. ` +
         `Cursor stayed at ${initialPos} after previous-prompt -o. ` +
@@ -540,17 +545,17 @@ export async function captureLastCommand(paneId: string, n: number = 1): Promise
     }
 
     // Move up one line from the output start to the command line
-    await executeTmux(`send-keys -X -t '${paneId}' cursor-up`);
+    await executeTmux(['send-keys', '-X', '-t', paneId, 'cursor-up']);
 
     // Select the full line and copy
-    await executeTmux(`send-keys -X -t '${paneId}' select-line`);
-    await executeTmux(`send-keys -X -t '${paneId}' copy-selection-and-cancel`);
+    await executeTmux(['send-keys', '-X', '-t', paneId, 'select-line']);
+    await executeTmux(['send-keys', '-X', '-t', paneId, 'copy-selection-and-cancel']);
 
-    const result = await executeTmux('show-buffer');
+    const result = await executeTmux(['show-buffer']);
     return result;
   } catch (error: any) {
     try {
-      await executeTmux(`send-keys -X -t '${paneId}' cancel`);
+      await executeTmux(['send-keys', '-X', '-t', paneId, 'cancel']);
     } catch {
       // ignore cleanup errors
     }
