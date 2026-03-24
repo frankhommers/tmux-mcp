@@ -261,18 +261,18 @@ export interface MoveWindowOptions {
  * Move a window to a different index or session
  */
 export async function moveWindow(options: MoveWindowOptions): Promise<void> {
-  let command = 'move-window';
+  const args = ['move-window'];
 
-  if (options.after) command += ' -a';
-  if (options.before) command += ' -b';
-  if (options.renumber) command += ' -r';
-  if (options.detached) command += ' -d';
-  if (options.kill) command += ' -k';
+  if (options.after) args.push('-a');
+  if (options.before) args.push('-b');
+  if (options.renumber) args.push('-r');
+  if (options.detached) args.push('-d');
+  if (options.kill) args.push('-k');
 
-  if (options.source) command += ` -s '${options.source}'`;
-  if (options.destination) command += ` -t '${options.destination}'`;
+  if (options.source) args.push('-s', options.source);
+  if (options.destination) args.push('-t', options.destination);
 
-  await executeTmux(command);
+  await executeTmux(args);
 }
 
 /**
