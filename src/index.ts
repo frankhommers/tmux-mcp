@@ -60,6 +60,14 @@ server.tool(
   async ({ name }) => {
     try {
       const session = await tmux.findSessionByName(name);
+      if (session && !(await isInScope(session.id, 'session'))) {
+        return {
+          content: [{
+            type: "text",
+            text: `Session not found or not in scope: ${name}`
+          }]
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -122,6 +130,7 @@ server.tool(
   },
   async ({ sessionId }) => {
     try {
+      await assertInScope(sessionId, 'session');
       const windows = await tmux.listWindows(sessionId);
       return {
         content: [{
@@ -150,6 +159,7 @@ server.tool(
   },
   async ({ windowId }) => {
     try {
+      await assertInScope(windowId, 'window');
       const panes = await tmux.listPanes(windowId);
       return {
         content: [{
@@ -180,6 +190,7 @@ server.tool(
   },
   async ({ paneId, lines, colors }) => {
     try {
+      await assertInScope(paneId, 'pane');
       // Parse lines parameter if provided
       const linesCount = lines ? parseInt(lines, 10) : undefined;
       const includeColors = colors || false;
@@ -212,6 +223,7 @@ server.tool(
   async ({ name }) => {
     try {
       const session = await tmux.createSession(name);
+      if (session) addAllowedSession(session.id);
       return {
         content: [{
           type: "text",
@@ -243,6 +255,7 @@ server.tool(
   },
   async ({ sessionId, name, background }) => {
     try {
+      await assertInScope(sessionId, 'session');
       const window = await tmux.createWindow(sessionId, name, background);
       return {
         content: [{
@@ -273,6 +286,7 @@ server.tool(
   },
   async ({ sessionId }) => {
     try {
+      await assertInScope(sessionId, 'session');
       await tmux.killSession(sessionId);
       return {
         content: [{
@@ -301,6 +315,7 @@ server.tool(
   },
   async ({ windowId }) => {
     try {
+      await assertInScope(windowId, 'window');
       await tmux.killWindow(windowId);
       return {
         content: [{
@@ -330,6 +345,7 @@ server.tool(
   },
   async ({ windowId, name }) => {
     try {
+      await assertInScope(windowId, 'window');
       await tmux.renameWindow(windowId, name);
       return {
         content: [{
@@ -359,6 +375,7 @@ server.tool(
   },
   async ({ paneId, name }) => {
     try {
+      await assertInScope(paneId, 'pane');
       await tmux.renamePane(paneId, name);
       return {
         content: [{
@@ -387,6 +404,7 @@ server.tool(
   },
   async ({ paneId }) => {
     try {
+      await assertInScope(paneId, 'pane');
       await tmux.killPane(paneId);
       return {
         content: [{
@@ -417,6 +435,7 @@ server.tool(
   },
   async ({ paneId, direction, size }) => {
     try {
+      await assertInScope(paneId, 'pane');
       const newPane = await tmux.splitPane(paneId, direction || 'vertical', size);
       return {
         content: [{
@@ -453,6 +472,8 @@ server.tool(
   },
   async (args) => {
     try {
+      if (args.source) await assertInScope(args.source, 'window');
+      if (args.destination) await assertInScope(args.destination, 'window');
       await tmux.moveWindow(args);
       return {
         content: [{
@@ -484,6 +505,7 @@ server.tool(
   },
   async ({ paneId, command, rawMode, noEnter }) => {
     try {
+      await assertInScope(paneId, 'pane');
       // If noEnter is true, automatically apply rawMode
       const effectiveRawMode = noEnter || rawMode;
       const commandId = await tmux.executeCommand(paneId, command, effectiveRawMode, noEnter);
@@ -581,6 +603,7 @@ server.tool(
   },
   async ({ paneId, n }) => {
     try {
+      await assertInScope(paneId, 'pane');
       const output = await tmux.captureLastOutput(paneId, n ?? 1);
       return {
         content: [{
@@ -610,6 +633,7 @@ server.tool(
   },
   async ({ paneId, n }) => {
     try {
+      await assertInScope(paneId, 'pane');
       const command = await tmux.captureLastCommand(paneId, n ?? 1);
       return {
         content: [{
