@@ -5,6 +5,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as tmux from "./tmux.js";
+import { initScope, assertInScope, isScopeActive, isInScope, addAllowedSession } from "./scope.js";
 
 // Create MCP server
 const server = new McpServer({
@@ -798,7 +799,8 @@ async function main() {
   try {
     const { values } = parseArgs({
       options: {
-        'shell-type': { type: 'string', default: 'bash', short: 's' }
+        'shell-type': { type: 'string', default: 'bash', short: 's' },
+        'scope': { type: 'string' }
       }
     });
 
@@ -806,6 +808,10 @@ async function main() {
     tmux.setShellConfig({
       type: values['shell-type'] as string
     });
+
+    // Initialize scope
+    const scopeValue = values['scope'] ?? process.env.TMUX_MCP_SCOPE ?? 'none';
+    await initScope(scopeValue);
 
     // Start the MCP server
     const transport = new StdioServerTransport();
