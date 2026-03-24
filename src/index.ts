@@ -750,6 +750,7 @@ server.resource(
     try {
       // Ensure paneId is a string
       const paneIdStr = Array.isArray(paneId) ? paneId[0] : paneId;
+      await assertInScope(paneIdStr, 'pane');
       // Default to no colors for resources to maintain clean programmatic access
       const content = await tmux.capturePaneContent(paneIdStr, 200, false);
       return {
