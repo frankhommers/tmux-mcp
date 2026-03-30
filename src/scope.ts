@@ -6,6 +6,12 @@ let scopeMode: ScopeMode = 'none';
 let scopeResolved = false;
 const allowedSessionIds = new Set<string>();
 
+// Excluded pane: the pane in which the MCP server (or agent) is running.
+// Detected via $TMUX_PANE. Excluded by default to prevent the agent from
+// interacting with its own pane. Use --include-current-pane to disable.
+let excludedPaneId: string | null = null;
+let excludeSelf = true;
+
 /**
  * Initialize scope mode. Call once at startup.
  * Does NOT detect the session yet — that happens lazily on first tool use.
@@ -98,4 +104,35 @@ export function addAllowedSession(sessionId: string): void {
  */
 export function getAllowedSessionIds(): ReadonlySet<string> {
   return allowedSessionIds;
+}
+
+/**
+ * Initialize the excluded-pane feature.
+ * Reads $TMUX_PANE to detect the current pane.
+ * When includeSelf is true, the feature is disabled.
+ */
+export function initExcludeSelf(includeSelf: boolean): void {
+  excludeSelf = !includeSelf;
+  if (excludeSelf) {
+    const paneEnv = process.env.TMUX_PANE;
+    excludedPaneId = paneEnv || null;
+  } else {
+    excludedPaneId = null;
+  }
+}
+
+/**
+ * Check if a pane ID is the excluded (self) pane.
+ * Returns true if the pane should be excluded.
+ */
+export function isExcludedPane(paneId: string): boolean {
+  if (!excludeSelf || !excludedPaneId) return false;
+  return paneId === excludedPaneId;
+}
+
+/**
+ * Get the excluded pane ID (if any). Used for informational purposes.
+ */
+export function getExcludedPaneId(): string | null {
+  return excludedPaneId;
 }
