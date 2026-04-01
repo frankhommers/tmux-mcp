@@ -77,6 +77,51 @@ Or in the Claude Desktop JSON config:
 
 The MCP server needs to know the shell only when executing commands, to properly read its exit status.
 
+### Scope
+
+By default the MCP server has unrestricted access to all tmux sessions, windows and panes. Use `--scope` to limit what the agent can see and do:
+
+| Mode | Access | Disabled tools |
+|------|--------|----------------|
+| `none` (default) | Everything | — |
+| `session` | Only the session the server runs in | `create-session` |
+| `window` | Only the window the server runs in | `create-session`, `create-window`, `kill-window`, `move-window` |
+
+Tools that fall outside the active scope are **removed from the tool list** — the LLM never sees them. Remaining tools that accept an ID (like `capture-pane` or `execute-command`) still validate that the target is within the allowed scope at runtime.
+
+```sh
+# Session scope
+claude mcp add tmux -- npx -y tmux-mcp --scope=session
+
+# Window scope — agent can only split panes in its own window
+claude mcp add tmux -- npx -y tmux-mcp --scope=window
+```
+
+Or via environment variable:
+
+```sh
+export TMUX_MCP_SCOPE=window
+```
+
+Or in JSON config:
+
+```json
+"mcpServers": {
+  "tmux": {
+    "command": "npx",
+    "args": ["-y", "tmux-mcp", "--scope=window"]
+  }
+}
+```
+
+### Exclude current pane
+
+By default the agent's own pane (detected via `$TMUX_PANE`) is excluded from all operations, preventing the agent from interacting with itself. Pass `--include-current-pane` to disable this:
+
+```sh
+claude mcp add tmux -- npx -y tmux-mcp --include-current-pane
+```
+
 ## Available Resources
 
 - `tmux://sessions` - List all tmux sessions
