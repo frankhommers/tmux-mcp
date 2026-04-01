@@ -1,10 +1,10 @@
 import { executeTmux } from "./tmux.js";
 
-type ScopeMode = 'none' | 'session';
+type ScopeMode = 'none' | 'session' | 'window';
 
 let scopeMode: ScopeMode = 'none';
-let scopeResolved = false;
 const allowedSessionIds = new Set<string>();
+let allowedWindowId: string | null = null;
 
 // Excluded pane: the pane in which the MCP server (or agent) is running.
 // Detected via $TMUX_PANE. Excluded by default to prevent the agent from
@@ -12,31 +12,34 @@ const allowedSessionIds = new Set<string>();
 let excludedPaneId: string | null = null;
 let excludeSelf = true;
 
+let scopeResolved = false;
+
 /**
  * Initialize scope mode. Call once at startup.
- * Does NOT detect the session yet — that happens lazily on first tool use.
- * This way the server always starts successfully (tools can be fetched, etc.).
+ * Only validates the mode value. Actual resolution of session/window IDs
+ * happens lazily on first tool use, so the server always starts successfully.
  */
 export function initScope(mode: string): void {
-  if (mode !== 'none' && mode !== 'session') {
-    throw new Error(`Invalid scope mode: "${mode}". Valid values: none, session`);
+  if (mode !== 'none' && mode !== 'session' && mode !== 'window') {
+    throw new Error(`Invalid scope mode: "${mode}". Valid values: none, session, window`);
   }
   scopeMode = mode as ScopeMode;
 }
 
 /**
- * Lazily resolve the allowed session. Called on first tool use when scope is active.
- * Tries to detect the current tmux session from $TMUX env var.
- * If $TMUX is not set, throws a clear error at tool-use time (not at startup).
+ * Lazily resolve the allowed session (and window for 'window' mode).
+ * Called on first tool use when scope is active.
+ * Throws a clear error at tool-use time if env vars are missing.
  */
-async function ensureScopeResolved(): Promise<void> {
+export async function ensureScopeResolved(): Promise<void> {
   if (scopeMode === 'none' || scopeResolved) return;
 
+  // Both 'session' and 'window' need session resolution
   const tmuxEnv = process.env.TMUX;
   if (!tmuxEnv) {
     throw new Error(
-      'Scope "session" is active but $TMUX is not set. ' +
-      'The MCP server must be running inside a tmux pane for session scoping to work.'
+      `Scope "${scopeMode}" is active but $TMUX is not set. ` +
+      'The MCP server must be running inside a tmux pane for scoping to work.'
     );
   }
 
@@ -46,10 +49,32 @@ async function ensureScopeResolved(): Promise<void> {
       throw new Error('Could not determine current tmux session ID.');
     }
     allowedSessionIds.add(sessionId);
-    scopeResolved = true;
   } catch (error: any) {
     throw new Error(`Failed to detect tmux session for scoping: ${error.message}`);
   }
+
+  // 'window' additionally needs window resolution
+  if (scopeMode === 'window') {
+    const paneEnv = process.env.TMUX_PANE;
+    if (!paneEnv) {
+      throw new Error(
+        'Scope "window" is active but $TMUX_PANE is not set. ' +
+        'The MCP server must be running inside a tmux pane for window scoping to work.'
+      );
+    }
+
+    try {
+      const windowId = await executeTmux(['display-message', '-p', '-t', paneEnv, '#{window_id}']);
+      if (!windowId) {
+        throw new Error('Could not determine current tmux window ID.');
+      }
+      allowedWindowId = windowId;
+    } catch (error: any) {
+      throw new Error(`Failed to detect tmux window for scoping: ${error.message}`);
+    }
+  }
+
+  scopeResolved = true;
 }
 
 /**
@@ -62,7 +87,9 @@ export function isScopeActive(): boolean {
 /**
  * Check if a resource is within the allowed scope.
  * When scope is 'none', always returns true.
- * Triggers lazy session resolution on first call.
+ * When scope is 'session', checks session membership.
+ * When scope is 'window', checks window membership for panes/windows,
+ * and session membership for sessions.
  */
 export async function isInScope(id: string, type: 'pane' | 'window' | 'session'): Promise<boolean> {
   if (scopeMode === 'none') return true;
@@ -70,6 +97,21 @@ export async function isInScope(id: string, type: 'pane' | 'window' | 'session')
   await ensureScopeResolved();
 
   try {
+    if (scopeMode === 'window') {
+      if (type === 'session') {
+        return allowedSessionIds.has(id);
+      }
+      // For panes and windows, check against the allowed window
+      let windowId: string;
+      if (type === 'window') {
+        windowId = id;
+      } else {
+        windowId = await executeTmux(['display-message', '-p', '-t', id, '#{window_id}']);
+      }
+      return windowId === allowedWindowId;
+    }
+
+    // scopeMode === 'session'
     let sessionId: string;
     if (type === 'session') {
       sessionId = id;
@@ -84,19 +126,26 @@ export async function isInScope(id: string, type: 'pane' | 'window' | 'session')
 
 /**
  * Assert a resource is in scope. Throws if not.
- * Triggers lazy session resolution on first call.
  */
 export async function assertInScope(id: string, type: 'pane' | 'window' | 'session'): Promise<void> {
   if (!(await isInScope(id, type))) {
-    throw new Error(`Access denied: ${type} ${id} is not in the allowed session scope.`);
+    const scopeLabel = scopeMode === 'window' ? 'window' : 'session';
+    throw new Error(`Access denied: ${type} ${id} is not in the allowed ${scopeLabel} scope.`);
   }
 }
 
 /**
- * Add a session to the allowed set. Called after create-session.
+ * Returns true if scope mode is 'window'.
  */
-export function addAllowedSession(sessionId: string): void {
-  allowedSessionIds.add(sessionId);
+export function isWindowScope(): boolean {
+  return scopeMode === 'window';
+}
+
+/**
+ * Returns the current scope mode.
+ */
+export function getScopeMode(): ScopeMode {
+  return scopeMode;
 }
 
 /**

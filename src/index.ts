@@ -5,7 +5,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as tmux from "./tmux.js";
-import { initScope, assertInScope, isScopeActive, isInScope, addAllowedSession, initExcludeSelf, isExcludedPane } from "./scope.js";
+import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane } from "./scope.js";
 
 // Create MCP server
 const server = new McpServer({
@@ -138,7 +138,14 @@ server.tool(
   async ({ sessionId }) => {
     try {
       await assertInScope(sessionId, 'session');
-      const windows = await tmux.listWindows(sessionId);
+      let windows = await tmux.listWindows(sessionId);
+      if (isWindowScope()) {
+        const filtered = [];
+        for (const w of windows) {
+          if (await isInScope(w.id, 'window')) filtered.push(w);
+        }
+        windows = filtered;
+      }
       return {
         content: [{
           type: "text",
@@ -225,7 +232,7 @@ server.tool(
 );
 
 // Create new session - Tool
-server.tool(
+const createSessionTool = server.tool(
   "create-session",
   "Create a new tmux session",
   {
@@ -234,7 +241,6 @@ server.tool(
   async ({ name }) => {
     try {
       const session = await tmux.createSession(name);
-      if (session) addAllowedSession(session.id);
       return {
         content: [{
           type: "text",
@@ -256,7 +262,7 @@ server.tool(
 );
 
 // Create new window - Tool
-server.tool(
+const createWindowTool = server.tool(
   "create-window",
   "Create a new window in a tmux session",
   {
@@ -318,7 +324,7 @@ server.tool(
 );
 
 // Kill window - Tool
-server.tool(
+const killWindowTool = server.tool(
   "kill-window",
   "Kill a tmux window by ID",
   {
@@ -478,7 +484,7 @@ server.tool(
 );
 
 // Move window - Tool
-server.tool(
+const moveWindowTool = server.tool(
   "move-window",
   "Move a tmux window to a different index or session",
   {
@@ -738,7 +744,14 @@ server.resource(
 
         // For each session, get all windows
         for (const session of sessions) {
-          const windows = await tmux.listWindows(session.id);
+          let windows = await tmux.listWindows(session.id);
+          if (isWindowScope()) {
+            const filteredWindows = [];
+            for (const w of windows) {
+              if (await isInScope(w.id, 'window')) filteredWindows.push(w);
+            }
+            windows = filteredWindows;
+          }
 
           // For each window, get all panes
           for (const window of windows) {
@@ -867,6 +880,28 @@ server.resource(
   }
 );
 
+/**
+ * Disable tools that are not applicable for the current scope mode.
+ * Called once at startup after initScope().
+ *
+ * - session scope: disable create-session
+ * - window scope: disable create-session, create-window, kill-window, move-window
+ */
+function disableToolsByScope(): void {
+  const mode = getScopeMode();
+  if (mode === 'none') return;
+
+  // Both session and window scope: cannot create new sessions
+  createSessionTool.disable();
+
+  if (mode === 'window') {
+    // Window scope: cannot create/kill/move windows
+    createWindowTool.disable();
+    killWindowTool.disable();
+    moveWindowTool.disable();
+  }
+}
+
 async function main() {
   try {
     const { values } = parseArgs({
@@ -882,9 +917,12 @@ async function main() {
       type: values['shell-type'] as string
     });
 
-    // Initialize scope mode (session is resolved lazily on first tool use)
+    // Initialize scope mode (session/window resolved lazily on first tool use)
     const scopeValue = values['scope'] ?? process.env.TMUX_MCP_SCOPE ?? 'none';
     initScope(scopeValue);
+
+    // Disable tools that don't apply to the active scope
+    disableToolsByScope();
 
     // Initialize exclude-self (excludes the agent's own pane by default)
     initExcludeSelf(values['include-current-pane'] as boolean);
