@@ -56,6 +56,61 @@ Add this MCP server to your Claude Desktop configuration:
 }
 ```
 
+### Installing from a GitHub fork
+
+If you want to run a fork or a specific branch instead of the published npm package, you can install directly from GitHub. The `prepare` script automatically compiles TypeScript on install.
+
+#### Claude Code
+
+```sh
+claude mcp add tmux -- npx github:frankhommers/tmux-mcp
+```
+
+#### Codex / OpenCode
+
+```sh
+# Codex
+codex mcp add tmux -- npx github:frankhommers/tmux-mcp
+
+# OpenCode (opencode.json)
+```
+
+```json
+{
+  "mcpServers": {
+    "tmux": {
+      "command": "npm",
+      "args": ["exec", "github:frankhommers/tmux-mcp"]
+    }
+  }
+}
+```
+
+#### Gemini CLI
+
+```sh
+gemini mcp add tmux npx github:frankhommers/tmux-mcp
+```
+
+#### Claude Desktop
+
+```json
+"mcpServers": {
+  "tmux": {
+    "command": "npx",
+    "args": ["github:frankhommers/tmux-mcp"]
+  }
+}
+```
+
+> **Note:** `npx` / `npm exec` caches the GitHub-installed package. After pushing new commits you need to clear the cache to pick up changes:
+>
+> ```sh
+> ./scripts/clear-npx-cache.sh
+> ```
+>
+> Then restart the MCP client so it fetches and builds the latest version.
+
 ### MCP server options
 
 You can optionally specify the command line shell you are using, if unspecified it defaults to `bash`. Pass `--shell-type` to the command:
