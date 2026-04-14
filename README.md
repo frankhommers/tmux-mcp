@@ -28,19 +28,19 @@ Check out this short video to get excited!
 ### Claude Code
 
 ```sh
-claude mcp add tmux -- npx -y tmux-mcp
+claude mcp add tmux -- npx --prefer-online -y tmux-mcp
 ```
 
 ### Codex
 
 ```sh
-codex mcp add tmux -- npx -y tmux-mcp
+codex mcp add tmux -- npx --prefer-online -y tmux-mcp
 ```
 
 ### Gemini CLI
 
 ```sh
-gemini mcp add tmux npx -y tmux-mcp
+gemini mcp add tmux npx --prefer-online -y tmux-mcp
 ```
 
 ### Claude Desktop
@@ -51,7 +51,7 @@ Add this MCP server to your Claude Desktop configuration:
 "mcpServers": {
   "tmux": {
     "command": "npx",
-    "args": ["-y", "tmux-mcp"]
+    "args": ["--prefer-online", "-y", "tmux-mcp"]
   }
 }
 ```
@@ -111,27 +111,6 @@ gemini mcp add tmux npx github:frankhommers/tmux-mcp
 >
 > Then restart the MCP client so it fetches and builds the latest version.
 
-### MCP server options
-
-You can optionally specify the command line shell you are using, if unspecified it defaults to `bash`. Pass `--shell-type` to the command:
-
-```sh
-claude mcp add tmux -- npx -y tmux-mcp --shell-type=zsh
-```
-
-Or in the Claude Desktop JSON config:
-
-```json
-"mcpServers": {
-  "tmux": {
-    "command": "npx",
-    "args": ["-y", "tmux-mcp", "--shell-type=fish"]
-  }
-}
-```
-
-The MCP server needs to know the shell only when executing commands, to properly read its exit status.
-
 ### Scope
 
 By default the MCP server has unrestricted access to all tmux sessions, windows and panes. Use `--scope` to limit what the agent can see and do:
@@ -146,10 +125,10 @@ Tools that fall outside the active scope are **removed from the tool list** — 
 
 ```sh
 # Session scope
-claude mcp add tmux -- npx -y tmux-mcp --scope=session
+claude mcp add tmux -- npx --prefer-online -y tmux-mcp --scope=session
 
 # Window scope — agent can only split panes in its own window
-claude mcp add tmux -- npx -y tmux-mcp --scope=window
+claude mcp add tmux -- npx --prefer-online -y tmux-mcp --scope=window
 ```
 
 Or via environment variable:
@@ -164,7 +143,7 @@ Or in JSON config:
 "mcpServers": {
   "tmux": {
     "command": "npx",
-    "args": ["-y", "tmux-mcp", "--scope=window"]
+    "args": ["--prefer-online", "-y", "tmux-mcp", "--scope=window"]
   }
 }
 ```
@@ -174,7 +153,7 @@ Or in JSON config:
 By default the agent's own pane (detected via `$TMUX_PANE`) is excluded from all operations, preventing the agent from interacting with itself. Pass `--include-current-pane` to disable this:
 
 ```sh
-claude mcp add tmux -- npx -y tmux-mcp --include-current-pane
+claude mcp add tmux -- npx --prefer-online -y tmux-mcp --include-current-pane
 ```
 
 ## Available Resources
@@ -205,6 +184,9 @@ claude mcp add tmux -- npx -y tmux-mcp --include-current-pane
 - `get-command-result` - Get the result of an async command
 - `capture-last-output` - Capture the output of a recent command using OSC 133 marks
 - `capture-last-command` - Capture the command line of a recent command using OSC 133 marks
+- `move-window` - Move a tmux window to a different index or session
+- `file-upload` - Upload a file or inline content to a tmux pane (gzip+base64 encoded, works over SSH/docker)
+- `file-download` - Download a file from a tmux pane to the local host or return its content
 
 ### OSC 133 Shell Integration
 
