@@ -960,6 +960,78 @@ server.resource(
   }
 );
 
+// File upload - Host/inline -> Pane
+server.tool(
+  "file-upload",
+  "Upload a file or inline content to a tmux pane. The content is gzip-compressed and base64-encoded on the host, sent as a single shell command, and decoded in the pane. Works over SSH/docker/any remote shell. Max ~128KB compressed payload (text files up to ~500KB thanks to gzip compression). Use scp/rsync for larger files.",
+  {
+    paneId: z.string().describe("ID of the tmux pane"),
+    destinationPath: z.string().describe("Path where the file will be written in the pane"),
+    sourcePath: z.string().optional().describe("Local file path on the MCP host. Either sourcePath or content must be provided."),
+    content: z.string().optional().describe("Inline text content to upload. Either sourcePath or content must be provided."),
+    permissions: z.string().optional().describe("chmod permissions to set, e.g. '755' for executable scripts"),
+    suppressHistory: z.boolean().optional().describe("Prepend space to avoid shell history"),
+  },
+  async (args) => {
+    try {
+      if (isExcludedPane(args.paneId)) {
+        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and is excluded.` }], isError: true };
+      }
+      await assertInScope(args.paneId, 'pane');
+      const result = await tmux.uploadFile({
+        paneId: args.paneId,
+        destinationPath: args.destinationPath,
+        sourcePath: args.sourcePath,
+        content: args.content,
+        permissions: args.permissions,
+        suppressHistory: args.suppressHistory,
+      });
+      return {
+        content: [{ type: "text", text: `Status: ${result.status}\n${result.message}\nBytes transferred: ${result.bytesTransferred}` }],
+        isError: result.status === 'error',
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error uploading file: ${error}` }], isError: true };
+    }
+  }
+);
+
+// File download - Pane -> Host
+server.tool(
+  "file-download",
+  "Download a file from a tmux pane to the local host or return its content. The file is gzip-compressed and base64-encoded in the pane, captured via command output, and decoded on the host. Works over SSH/docker/any remote shell. If destinationPath is omitted, the file content is returned as text. Max ~128KB compressed payload.",
+  {
+    paneId: z.string().describe("ID of the tmux pane"),
+    sourcePath: z.string().describe("Path of the file in the pane"),
+    destinationPath: z.string().optional().describe("Local path to write the file to. If omitted, content is returned as text."),
+    suppressHistory: z.boolean().optional().describe("Prepend space to avoid shell history"),
+  },
+  async (args) => {
+    try {
+      if (isExcludedPane(args.paneId)) {
+        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and is excluded.` }], isError: true };
+      }
+      await assertInScope(args.paneId, 'pane');
+      const result = await tmux.downloadFile({
+        paneId: args.paneId,
+        sourcePath: args.sourcePath,
+        destinationPath: args.destinationPath,
+        suppressHistory: args.suppressHistory,
+      });
+      if (result.status === 'error') {
+        return { content: [{ type: "text", text: `Status: error\n${result.message}` }], isError: true };
+      }
+      let text = `Status: completed\n${result.message}\nBytes transferred: ${result.bytesTransferred}`;
+      if (result.content !== undefined) {
+        text += `\n\n--- Content ---\n${result.content}`;
+      }
+      return { content: [{ type: "text", text }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error downloading file: ${error}` }], isError: true };
+    }
+  }
+);
+
 /**
  * Disable tools that are not applicable for the current scope mode.
  * Called once at startup after initScope().
