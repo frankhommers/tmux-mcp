@@ -430,6 +430,115 @@ export function getCommand(commandId: string): CommandExecution | null {
   return activeCommands.get(commandId) || null;
 }
 
+/**
+ * Get the name of the foreground process currently attached to the pane's tty.
+ * When the shell is idle this is the shell name (bash/zsh/fish/…); while a
+ * command runs, it's that command's name.
+ */
+export async function getPaneCurrentCommand(paneId: string): Promise<string> {
+  return executeTmux(['display-message', '-p', '-t', paneId, '#{pane_current_command}']);
+}
+
+/**
+ * Send a single Ctrl-C key event to a pane.
+ */
+export async function sendInterrupt(paneId: string): Promise<void> {
+  await executeTmux(['send-keys', '-t', paneId, 'C-c']);
+}
+
+export type BlockingStatus =
+  | 'completed'
+  | 'error'
+  | 'timed_out'
+  | 'timed_out_interrupted'
+  | 'timed_out_still_running';
+
+export interface BlockingResult {
+  commandId: string;
+  status: BlockingStatus;
+  exitCode: number | null;
+  output: string;
+}
+
+export interface RunBlockingOptions {
+  timeoutSeconds?: number;        // undefined = wait indefinitely
+  pollIntervalMs?: number;        // default 500
+  interruptOnTimeout?: boolean;   // default true
+  interruptCount?: number;        // default 3
+  interruptIntervalMs?: number;   // default 200
+  postInterruptWaitMs?: number;   // default 500
+}
+
+/**
+ * Submit a command with marker wrapping, then block until completion or timeout.
+ * On timeout, optionally sends Ctrl-C sequences and verifies the kill by
+ * comparing pane_current_command before and after.
+ */
+export async function runBlocking(
+  paneId: string,
+  command: string,
+  opts: RunBlockingOptions = {}
+): Promise<BlockingResult> {
+  const pollIntervalMs = opts.pollIntervalMs ?? 500;
+  const interruptOnTimeout = opts.interruptOnTimeout ?? true;
+  const interruptCount = opts.interruptCount ?? 3;
+  const interruptIntervalMs = opts.interruptIntervalMs ?? 200;
+  const postInterruptWaitMs = opts.postInterruptWaitMs ?? 500;
+
+  const foregroundBefore = await getPaneCurrentCommand(paneId);
+
+  const commandId = await executeCommand(paneId, command, false, false);
+
+  const deadline = opts.timeoutSeconds !== undefined
+    ? Date.now() + opts.timeoutSeconds * 1000
+    : Number.POSITIVE_INFINITY;
+
+  while (true) {
+    const status = await checkCommandStatus(commandId);
+    if (status && status.status !== 'pending') {
+      return {
+        commandId,
+        status: status.status === 'completed' ? 'completed' : 'error',
+        exitCode: status.exitCode ?? null,
+        output: status.result ?? '',
+      };
+    }
+
+    if (Date.now() >= deadline) break;
+
+    const remaining = deadline - Date.now();
+    await sleep(Math.min(pollIntervalMs, Math.max(remaining, 0)));
+  }
+
+  // Timeout path
+  const partial = await capturePaneContent(paneId, 3000);
+
+  if (!interruptOnTimeout) {
+    return { commandId, status: 'timed_out', exitCode: null, output: partial };
+  }
+
+  for (let i = 0; i < interruptCount; i++) {
+    await sendInterrupt(paneId);
+    if (i < interruptCount - 1) await sleep(interruptIntervalMs);
+  }
+  await sleep(postInterruptWaitMs);
+
+  const foregroundAfter = await getPaneCurrentCommand(paneId);
+  const finalOutput = await capturePaneContent(paneId, 3000);
+
+  const killed = foregroundAfter === foregroundBefore;
+  return {
+    commandId,
+    status: killed ? 'timed_out_interrupted' : 'timed_out_still_running',
+    exitCode: null,
+    output: finalOutput,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Get all active command IDs
 export function getActiveCommandIds(): string[] {
   return Array.from(activeCommands.keys());

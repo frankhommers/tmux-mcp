@@ -519,10 +519,10 @@ const moveWindowTool = server.tool(
   }
 );
 
-// Execute command in pane - Tool
+// Execute command in pane (fire-and-forget async) - Tool
 server.tool(
-  "execute-command",
-  "Execute a command in a tmux pane and get results. For interactive applications (REPLs, editors), use `rawMode=true`. IMPORTANT: When `rawMode=false` (default), avoid heredoc syntax (cat << EOF) and other multi-line constructs as they conflict with command wrapping. For file writing, prefer: printf 'content\\n' > file, echo statements, or write to temp files instead",
+  "execute-command-async",
+  "Fire-and-forget: send a command to a tmux pane and return a commandId immediately. Use `get-command-result` to poll for completion and output. For interactive applications (REPLs, editors), use `rawMode=true`. IMPORTANT: When `rawMode=false` (default), avoid heredoc syntax (cat << EOF) and other multi-line constructs as they conflict with command wrapping. For file writing, prefer: printf 'content\\n' > file, echo statements, or write to temp files instead. If you want to block until the command finishes, use `execute-command-kill-after` or `execute-command-wait-for-exit` instead.",
   {
     paneId: z.string().describe("ID of the tmux pane"),
     command: z.string().describe("Command to execute"),
@@ -535,7 +535,6 @@ server.tool(
         return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
-      // If noEnter is true, automatically apply rawMode
       const effectiveRawMode = noEnter || rawMode;
       const commandId = await tmux.executeCommand(paneId, command, effectiveRawMode, noEnter);
 
@@ -549,13 +548,11 @@ server.tool(
         };
       }
 
-      // Create the resource URI for this command's results
       const resourceUri = `tmux://command/${commandId}/result`;
-
       return {
         content: [{
           type: "text",
-          text: `Command execution started.\n\nTo get results, subscribe to and read resource: ${resourceUri}\n\nStatus will change from 'pending' to 'completed' or 'error' when finished.`
+          text: `Command execution started.\n\nCommand ID: ${commandId}\nPoll with 'get-command-result', or subscribe to resource: ${resourceUri}\n\nStatus will change from 'pending' to 'completed' or 'error' when finished.`
         }]
       };
     } catch (error) {
@@ -566,6 +563,81 @@ server.tool(
         }],
         isError: true
       };
+    }
+  }
+);
+
+function formatBlockingResult(res: tmux.BlockingResult): string {
+  const lines = [
+    `Status: ${res.status}`,
+    `Exit code: ${res.exitCode === null ? 'n/a' : res.exitCode}`,
+    `Command ID: ${res.commandId}`,
+    '',
+    '--- Output ---',
+    res.output,
+  ];
+  if (res.status === 'timed_out_still_running') {
+    lines.push('', 'NOTE: Ctrl-C was sent but the foreground process did not exit. The command is still running in the pane. Consider escalating (e.g. C-\\ via execute-command-async with rawMode, or kill-pane).');
+  } else if (res.status === 'timed_out') {
+    lines.push('', 'NOTE: Timed out; interrupt was disabled. The command is still running in the pane.');
+  }
+  return lines.join('\n');
+}
+
+// Execute command, block with timeout, kill on timeout - Tool
+server.tool(
+  "execute-command-kill-after",
+  "Execute a command and block until it completes OR the timeout elapses. On timeout, sends Ctrl-C sequences to the pane and verifies the kill by comparing pane_current_command before/after. Returns one of: 'completed', 'error', 'timed_out' (if interruptOnTimeout=false), 'timed_out_interrupted' (kill confirmed), or 'timed_out_still_running' (command ignored SIGINT). Does not support rawMode/noEnter.",
+  {
+    paneId: z.string().describe("ID of the tmux pane"),
+    command: z.string().describe("Command to execute"),
+    timeoutSeconds: z.number().positive().describe("Maximum seconds to wait before timing out"),
+    pollIntervalMs: z.number().positive().optional().describe("How often to check for completion. Default: 500"),
+    interruptOnTimeout: z.boolean().optional().describe("Send Ctrl-C on timeout. Default: true"),
+    interruptCount: z.number().int().positive().optional().describe("How many Ctrl-C's to send. Default: 3"),
+    interruptIntervalMs: z.number().nonnegative().optional().describe("Delay between Ctrl-C's. Default: 200"),
+    postInterruptWaitMs: z.number().nonnegative().optional().describe("Wait time after last Ctrl-C before capturing final output and checking kill. Default: 500"),
+  },
+  async (args) => {
+    try {
+      if (isExcludedPane(args.paneId)) {
+        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and is excluded.` }], isError: true };
+      }
+      await assertInScope(args.paneId, 'pane');
+      const result = await tmux.runBlocking(args.paneId, args.command, {
+        timeoutSeconds: args.timeoutSeconds,
+        pollIntervalMs: args.pollIntervalMs,
+        interruptOnTimeout: args.interruptOnTimeout,
+        interruptCount: args.interruptCount,
+        interruptIntervalMs: args.interruptIntervalMs,
+        postInterruptWaitMs: args.postInterruptWaitMs,
+      });
+      return { content: [{ type: "text", text: formatBlockingResult(result) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error executing command: ${error}` }], isError: true };
+    }
+  }
+);
+
+// Execute command, block until completion (no timeout) - Tool
+server.tool(
+  "execute-command-wait-for-exit",
+  "Execute a command and block until it completes. No timeout — will wait indefinitely. Returns 'completed' or 'error' with exit code and output. Does not support rawMode/noEnter.",
+  {
+    paneId: z.string().describe("ID of the tmux pane"),
+    command: z.string().describe("Command to execute"),
+    pollIntervalMs: z.number().positive().optional().describe("How often to check for completion. Default: 500"),
+  },
+  async ({ paneId, command, pollIntervalMs }) => {
+    try {
+      if (isExcludedPane(paneId)) {
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
+      }
+      await assertInScope(paneId, 'pane');
+      const result = await tmux.runBlocking(paneId, command, { pollIntervalMs });
+      return { content: [{ type: "text", text: formatBlockingResult(result) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error executing command: ${error}` }], isError: true };
     }
   }
 );

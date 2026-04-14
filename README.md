@@ -87,7 +87,7 @@ By default the MCP server has unrestricted access to all tmux sessions, windows 
 | `session` | Only the session the server runs in | `create-session` |
 | `window` | Only the window the server runs in | `create-session`, `create-window`, `kill-window`, `move-window` |
 
-Tools that fall outside the active scope are **removed from the tool list** — the LLM never sees them. Remaining tools that accept an ID (like `capture-pane` or `execute-command`) still validate that the target is within the allowed scope at runtime.
+Tools that fall outside the active scope are **removed from the tool list** — the LLM never sees them. Remaining tools that accept an ID (like `capture-pane` or `execute-command-async`) still validate that the target is within the allowed scope at runtime.
 
 ```sh
 # Session scope
@@ -144,8 +144,10 @@ claude mcp add tmux -- npx -y tmux-mcp --include-current-pane
 - `kill-pane` - Kill a tmux pane by ID
 - `rename-window` - Rename a tmux window
 - `rename-pane` - Rename a tmux pane (set pane title)
-- `execute-command` - Execute a command in a tmux pane
-- `get-command-result` - Get the result of an executed command
+- `execute-command-async` - Fire-and-forget: send a command and return a commandId immediately (supports `rawMode`/`noEnter`)
+- `execute-command-kill-after` - Execute a command and block with a timeout; on timeout, sends Ctrl-C and verifies the kill via `pane_current_command`
+- `execute-command-wait-for-exit` - Execute a command and block until it completes (no timeout)
+- `get-command-result` - Get the result of an async command
 - `capture-last-output` - Capture the output of a recent command using OSC 133 marks
 - `capture-last-command` - Capture the command line of a recent command using OSC 133 marks
 
