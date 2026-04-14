@@ -856,8 +856,11 @@ export async function uploadFile(opts: FileUploadOptions): Promise<FileTransferR
   }
 
   const destSQ = shellSingleQuote(opts.destinationPath);
-  let cmd = `echo '${base64}' | base64 -d | gzip -d > ${destSQ}`;
+  let cmd = `printf '%s' '${base64}' | (base64 -d 2>/dev/null || base64 -D) | gzip -d > ${destSQ}`;
   if (opts.permissions) {
+    if (!/^[0-7]{3,4}$/.test(opts.permissions)) {
+      throw new Error(`Invalid permissions: ${opts.permissions}. Use octal format (e.g. "644", "0755").`);
+    }
     cmd += ` && chmod ${opts.permissions} ${destSQ}`;
   }
 
@@ -923,7 +926,16 @@ export async function downloadFile(opts: FileDownloadOptions): Promise<FileDownl
   }
 
   const compressed = Buffer.from(base64, 'base64');
-  const rawBuffer = gunzipSync(compressed);
+  let rawBuffer: Buffer;
+  try {
+    rawBuffer = gunzipSync(compressed);
+  } catch (err: any) {
+    return {
+      status: 'error',
+      message: `Failed to decompress downloaded data: ${err.message}`,
+      bytesTransferred: 0,
+    };
+  }
   const bytesTransferred = rawBuffer.length;
 
   if (opts.destinationPath) {
