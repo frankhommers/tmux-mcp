@@ -1,6 +1,8 @@
 import { execFile as execFileCallback } from "child_process";
 import { promisify } from "util";
 import { v4 as uuidv4 } from 'uuid';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { readFile, writeFile } from 'node:fs/promises';
 
 const execFile = promisify(execFileCallback);
 
@@ -36,6 +38,12 @@ interface CommandExecution {
   exitCode?: number;
   rawMode?: boolean;
 }
+
+/**
+ * Maximum base64 payload size in characters.
+ * Conservative limit for tmux send-keys (~128KB).
+ */
+const MAX_BASE64_PAYLOAD = 131072;
 
 /**
  * Execute a tmux command and return the result.
@@ -804,4 +812,134 @@ export async function captureLastCommand(paneId: string, n: number = 1): Promise
   }
 }
 
+export interface FileUploadOptions {
+  paneId: string;
+  destinationPath: string;
+  sourcePath?: string;
+  content?: string;
+  permissions?: string;
+  suppressHistory?: boolean;
+}
+
+export interface FileTransferResult {
+  status: 'completed' | 'error';
+  message: string;
+  bytesTransferred: number;
+}
+
+export async function uploadFile(opts: FileUploadOptions): Promise<FileTransferResult> {
+  if (!opts.sourcePath && opts.content === undefined) {
+    throw new Error('Either sourcePath or content must be provided');
+  }
+  if (opts.sourcePath && opts.content !== undefined) {
+    throw new Error('Provide either sourcePath or content, not both');
+  }
+
+  let rawBuffer: Buffer;
+  if (opts.sourcePath) {
+    rawBuffer = await readFile(opts.sourcePath);
+  } else {
+    rawBuffer = Buffer.from(opts.content!, 'utf-8');
+  }
+
+  const originalSize = rawBuffer.length;
+  const compressed = gzipSync(rawBuffer, { level: 9 });
+  const base64 = compressed.toString('base64');
+
+  if (base64.length > MAX_BASE64_PAYLOAD) {
+    const maxApprox = Math.round(MAX_BASE64_PAYLOAD * 0.75 / 1024);
+    throw new Error(
+      `File too large: compressed payload is ${base64.length} chars ` +
+      `(limit: ${MAX_BASE64_PAYLOAD}). Original size: ${originalSize} bytes. ` +
+      `Use scp/rsync for files larger than ~${maxApprox}KB compressed.`
+    );
+  }
+
+  const destSQ = shellSingleQuote(opts.destinationPath);
+  let cmd = `echo '${base64}' | base64 -d | gzip -d > ${destSQ}`;
+  if (opts.permissions) {
+    cmd += ` && chmod ${opts.permissions} ${destSQ}`;
+  }
+
+  const result = await runBlocking(opts.paneId, cmd, {
+    timeoutSeconds: 30,
+    suppressHistory: opts.suppressHistory,
+  });
+
+  if (result.status === 'completed') {
+    return {
+      status: 'completed',
+      message: `Successfully uploaded ${originalSize} bytes to ${opts.destinationPath}`,
+      bytesTransferred: originalSize,
+    };
+  }
+
+  return {
+    status: 'error',
+    message: `Upload failed (exit ${result.exitCode}): ${result.output}`,
+    bytesTransferred: 0,
+  };
+}
+
+export interface FileDownloadOptions {
+  paneId: string;
+  sourcePath: string;
+  destinationPath?: string;
+  suppressHistory?: boolean;
+}
+
+export interface FileDownloadResult {
+  status: 'completed' | 'error';
+  message: string;
+  content?: string;
+  bytesTransferred: number;
+}
+
+export async function downloadFile(opts: FileDownloadOptions): Promise<FileDownloadResult> {
+  const srcSQ = shellSingleQuote(opts.sourcePath);
+  const cmd = `gzip -c ${srcSQ} | base64`;
+
+  const result = await runBlocking(opts.paneId, cmd, {
+    timeoutSeconds: 30,
+    suppressHistory: opts.suppressHistory,
+  });
+
+  if (result.status !== 'completed' || result.exitCode !== 0) {
+    return {
+      status: 'error',
+      message: `Download failed (exit ${result.exitCode}): ${result.output}`,
+      bytesTransferred: 0,
+    };
+  }
+
+  const base64 = result.output.trim().replace(/\s+/g, '');
+
+  if (base64.length > MAX_BASE64_PAYLOAD) {
+    return {
+      status: 'error',
+      message: `Remote file too large: compressed payload is ${base64.length} chars (limit: ${MAX_BASE64_PAYLOAD}). Use scp/rsync instead.`,
+      bytesTransferred: 0,
+    };
+  }
+
+  const compressed = Buffer.from(base64, 'base64');
+  const rawBuffer = gunzipSync(compressed);
+  const bytesTransferred = rawBuffer.length;
+
+  if (opts.destinationPath) {
+    await writeFile(opts.destinationPath, rawBuffer);
+    return {
+      status: 'completed',
+      message: `Successfully downloaded ${bytesTransferred} bytes to ${opts.destinationPath}`,
+      bytesTransferred,
+    };
+  }
+
+  return {
+    status: 'completed',
+    message: `Successfully downloaded ${bytesTransferred} bytes`,
+    content: rawBuffer.toString('utf-8'),
+    bytesTransferred,
+  };
+}
 
