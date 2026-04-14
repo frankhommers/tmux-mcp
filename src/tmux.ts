@@ -37,21 +37,6 @@ interface CommandExecution {
   rawMode?: boolean;
 }
 
-export type ShellType = 'bash' | 'zsh' | 'fish';
-
-let shellConfig: { type: ShellType } = { type: 'bash' };
-
-export function setShellConfig(config: { type: string }): void {
-  // Validate shell type
-  const validShells: ShellType[] = ['bash', 'zsh', 'fish'];
-
-  if (validShells.includes(config.type as ShellType)) {
-    shellConfig = { type: config.type as ShellType };
-  } else {
-    shellConfig = { type: 'bash' };
-  }
-}
-
 /**
  * Execute a tmux command and return the result.
  * Uses execFile to pass arguments directly without shell interpretation,
@@ -319,8 +304,26 @@ const activeCommands = new Map<string, CommandExecution>();
 const startMarkerText = 'TMUX_MCP_START';
 const endMarkerPrefix = "TMUX_MCP_DONE_";
 
+export interface ExecuteCommandOptions {
+  rawMode?: boolean;
+  noEnter?: boolean;
+  timeoutSeconds?: number;
+  suppressHistory?: boolean;
+}
+
 // Execute a command in a tmux pane and track its execution
-export async function executeCommand(paneId: string, command: string, rawMode?: boolean, noEnter?: boolean): Promise<string> {
+export async function executeCommand(
+  paneId: string,
+  command: string,
+  rawModeOrOpts?: boolean | ExecuteCommandOptions,
+  noEnter?: boolean,
+): Promise<string> {
+  const opts: ExecuteCommandOptions = typeof rawModeOrOpts === 'object' && rawModeOrOpts !== null
+    ? rawModeOrOpts
+    : { rawMode: rawModeOrOpts, noEnter };
+  const rawMode = opts.rawMode;
+  const effectiveNoEnter = opts.noEnter;
+
   // Generate unique ID for this command execution
   const commandId = uuidv4();
   const commandExec: CommandExecution = {
@@ -329,23 +332,21 @@ export async function executeCommand(paneId: string, command: string, rawMode?: 
     command,
     status: 'pending',
     startTime: new Date(),
-    rawMode: rawMode || noEnter
+    rawMode: rawMode || effectiveNoEnter
   }
 
    // Store command in tracking map
   activeCommands.set(commandId, commandExec);
 
   let fullCommand: string;
-  if (rawMode || noEnter) {
+  if (rawMode || effectiveNoEnter) {
     fullCommand = command;
   } else {
-    const startMarkerText = getStartMarkerText(commandExec)
-    const endMarkerText = getEndMarkerText(commandExec);
-    fullCommand = `echo "${startMarkerText}"; ${command}; echo "${endMarkerText}"`;
+    fullCommand = buildWrappedCommand(commandExec, command, opts.timeoutSeconds, opts.suppressHistory);
   }
 
   // Send the command to the tmux pane
-  if (noEnter) {
+  if (effectiveNoEnter) {
     // Check if this is a special key (e.g., Up, Down, Left, Right, Escape, Tab, etc.)
     // Special keys in tmux are typically capitalized or have special names
     const specialKeys = ['Up', 'Down', 'Left', 'Right', 'Escape', 'Tab', 'Enter', 'Space',
@@ -446,32 +447,49 @@ export async function sendInterrupt(paneId: string): Promise<void> {
   await executeTmux(['send-keys', '-t', paneId, 'C-c']);
 }
 
-/**
- * Detect whether GNU `timeout` (or `gtimeout` on macOS via brew coreutils) is
- * available on PATH. Result is cached.
- */
-let cachedTimeoutBinary: string | null | undefined = undefined;
-export async function detectTimeoutBinary(): Promise<string | null> {
-  if (cachedTimeoutBinary !== undefined) return cachedTimeoutBinary;
-  for (const bin of ['timeout', 'gtimeout']) {
-    try {
-      await execFile(bin, ['--version']);
-      cachedTimeoutBinary = bin;
-      return bin;
-    } catch {
-      // try next
-    }
-  }
-  cachedTimeoutBinary = null;
-  return null;
-}
-
 function shellSingleQuote(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-function wrapWithTimeout(command: string, seconds: number, timeoutBin: string): string {
-  return `${timeoutBin} ${seconds}s ${shellConfig.type} -c ${shellSingleQuote(command)}`;
+/**
+ * Build the full line sent via `send-keys` for a tracked command. Wraps the
+ * user's command in `sh -c '...'` so parsing is POSIX regardless of the pane's
+ * interactive shell (zsh/fish/bash/…). When a timeout is requested, detects
+ * `gtimeout`/`timeout` inline (on the target host, at invocation time — no
+ * cache), wrapping the command when a binary is found, and running unguarded
+ * when not (the outer poll loop handles the Ctrl-C fallback).
+ *
+ * `suppressHistory` prepends a single space, which keeps the line out of
+ * history for shells configured with HISTCONTROL=ignorespace / HIST_IGNORE_SPACE
+ * (bash/zsh); a no-op elsewhere.
+ */
+function buildWrappedCommand(
+  command: CommandExecution,
+  userCmd: string,
+  timeoutSeconds?: number,
+  suppressHistory?: boolean,
+): string {
+  const startMarker = getStartMarkerText(command);
+  const endMarker = getEndMarkerText(command);
+
+  let body: string;
+  if (timeoutSeconds === undefined) {
+    body = `echo "${startMarker}"; ${userCmd}; echo "${endMarker}"`;
+  } else {
+    // Assign userCmd to a shell variable using a single-quoted literal so the
+    // outer sh doesn't expand or re-parse it. `'` inside userCmd is escaped as
+    // `'\''`. The inner `sh -c "$U"` then receives the exact user command.
+    const userCmdSQ = "'" + userCmd.replace(/'/g, "'\\''") + "'";
+    body =
+      `U=${userCmdSQ}; ` +
+      `echo "${startMarker}"; ` +
+      `T=$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null); ` +
+      `\${T:+$T ${timeoutSeconds}s} sh -c "$U"; ` +
+      `echo "${endMarker}"`;
+  }
+
+  const line = `sh -c ${shellSingleQuote(body)}`;
+  return suppressHistory ? ` ${line}` : line;
 }
 
 export type BlockingStatus =
@@ -495,18 +513,18 @@ export interface RunBlockingOptions {
   interruptCount?: number;        // default 3
   interruptIntervalMs?: number;   // default 200
   postInterruptWaitMs?: number;   // default 500
+  suppressHistory?: boolean;      // prepend space to dodge history (bash/zsh w/ ignorespace)
 }
 
 /**
  * Submit a command with marker wrapping, then block until completion or timeout.
  *
- * If GNU `timeout` (or `gtimeout`) is available and a timeout was requested,
- * wraps the command with it so the kernel handles the kill cleanly. Exit code
- * 124 (or 137 with --kill-after) signals the timeout fired.
- *
- * Falls back to the manual Ctrl-C path when no timeout binary is available.
- * In that case, kill success is verified by comparing pane_current_command
- * before and after sending the interrupts.
+ * Timeout handling is always inline: when `timeoutSeconds` is set, the wrapper
+ * probes for `gtimeout`/`timeout` on the target host (which may be remote over
+ * SSH, a container, etc.) at invocation time. When found, exit code 124/137
+ * signals the timeout fired. When not found, the wrapper runs the command
+ * unguarded and we fall back to the manual Ctrl-C path once the poll deadline
+ * hits; kill success is verified by comparing pane_current_command before/after.
  */
 export async function runBlocking(
   paneId: string,
@@ -520,33 +538,23 @@ export async function runBlocking(
   const postInterruptWaitMs = opts.postInterruptWaitMs ?? 500;
 
   const wantsTimeout = opts.timeoutSeconds !== undefined;
-  const timeoutBin = wantsTimeout ? await detectTimeoutBinary() : null;
-  const useTimeoutBinary = wantsTimeout && timeoutBin !== null && interruptOnTimeout;
 
-  // Foreground snapshot only needed for the C-c fallback path.
-  const foregroundBefore = wantsTimeout && !useTimeoutBinary
-    ? await getPaneCurrentCommand(paneId)
-    : null;
+  // Foreground snapshot for verifying a successful Ctrl-C kill later.
+  const foregroundBefore = wantsTimeout ? await getPaneCurrentCommand(paneId) : null;
 
-  const effectiveCommand = useTimeoutBinary
-    ? wrapWithTimeout(command, opts.timeoutSeconds!, timeoutBin!)
-    : command;
+  const commandId = await executeCommand(paneId, command, {
+    timeoutSeconds: opts.timeoutSeconds,
+    suppressHistory: opts.suppressHistory,
+  });
 
-  const commandId = await executeCommand(paneId, effectiveCommand, false, false);
-
-  // Polling deadline:
-  // - With timeout binary: generous safety net (timeoutSeconds + 10s) — the
-  //   binary handles the kill, we just wait for the marker to appear.
-  // - With manual fallback: timeoutSeconds is the actual deadline.
-  // - Without any timeout (wait-for-exit): poll forever.
-  let deadline: number;
-  if (useTimeoutBinary) {
-    deadline = Date.now() + (opts.timeoutSeconds! + 10) * 1000;
-  } else if (wantsTimeout) {
-    deadline = Date.now() + opts.timeoutSeconds! * 1000;
-  } else {
-    deadline = Number.POSITIVE_INFINITY;
-  }
+  // Polling deadline. When a timeout was requested, give a generous +10s
+  // safety net: the inline `timeout` binary (if present on the target) may
+  // take a beat to kill + for the end marker to surface. If no binary is
+  // present, the end marker never appears within the window and we hit the
+  // deadline, triggering the Ctrl-C fallback below.
+  const deadline = wantsTimeout
+    ? Date.now() + (opts.timeoutSeconds! + 10) * 1000
+    : Number.POSITIVE_INFINITY;
 
   while (true) {
     const status = await checkCommandStatus(commandId);
@@ -554,7 +562,7 @@ export async function runBlocking(
       const exitCode = status.exitCode ?? null;
       // 124 = SIGTERM from `timeout`; 137 = SIGKILL (via --kill-after, not
       // currently used but covered for safety).
-      if (useTimeoutBinary && (exitCode === 124 || exitCode === 137)) {
+      if (wantsTimeout && (exitCode === 124 || exitCode === 137)) {
         return {
           commandId,
           status: 'timed_out_interrupted',
@@ -576,17 +584,12 @@ export async function runBlocking(
     await sleep(Math.min(pollIntervalMs, Math.max(remaining, 0)));
   }
 
-  // Deadline hit without seeing the end marker.
+  // Deadline hit without seeing the end marker — no `timeout` binary on the
+  // target, command still running.
   const partial = await capturePaneContent(paneId, 3000);
 
   if (!interruptOnTimeout) {
     return { commandId, status: 'timed_out', exitCode: null, output: partial };
-  }
-
-  if (useTimeoutBinary) {
-    // Marker should have appeared but didn't — `timeout` may have been
-    // bypassed or the shell got stuck. Report still-running honestly.
-    return { commandId, status: 'timed_out_still_running', exitCode: null, output: partial };
   }
 
   // Manual C-c fallback path
@@ -639,9 +642,8 @@ function getEndMarkerPrefix(command: CommandExecution): string {
 }
 
 function getEndMarkerText(command: CommandExecution): string {
-  return shellConfig.type === 'fish'
-    ? `${getEndMarkerPrefix(command)}$status`
-    : `${getEndMarkerPrefix(command)}$?`;
+  // Always `$?`: the command runs inside `sh -c`, not the pane's interactive shell.
+  return `${getEndMarkerPrefix(command)}$?`;
 }
 
 // --- OSC 133 Capture Tools ---
