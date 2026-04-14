@@ -856,7 +856,10 @@ export async function uploadFile(opts: FileUploadOptions): Promise<FileTransferR
   }
 
   const destSQ = shellSingleQuote(opts.destinationPath);
-  let cmd = `printf '%s' '${base64}' | (base64 -d 2>/dev/null || base64 -D) | gzip -d > ${destSQ}`;
+  // Detect base64 decode flag: GNU uses -d, macOS uses -D.
+  // Probe by decoding a known value and checking the result.
+  let cmd = `B=$(if printf '%s' 'dGVzdA==' | base64 -d 2>/dev/null | grep -q test; then echo d; else echo D; fi); ` +
+    `printf '%s' '${base64}' | base64 -$B | gzip -d > ${destSQ}`;
   if (opts.permissions) {
     if (!/^[0-7]{3,4}$/.test(opts.permissions)) {
       throw new Error(`Invalid permissions: ${opts.permissions}. Use octal format (e.g. "644", "0755").`);
