@@ -55,18 +55,30 @@ Parameters:
 - `postInterruptWaitMs?: number` — how long to wait after the last Ctrl-C before capturing final output. Default: 500.
 
 Returns an object containing:
-- `status`: `completed` | `error` | `timed_out` | `timed_out_interrupted`
-- `exitCode`: number or `null` (null when timed out without clean exit)
-- `output`: string — whatever was captured between the start/end markers, or partial content if no end marker was found.
+- `status`: `completed` | `error` | `timed_out` | `timed_out_interrupted` | `timed_out_still_running`
+- `exitCode`: number or `null` (null when timed out; end marker won't fire because SIGINT aborts the bash command list)
+- `output`: string — partial pane content captured at the moment of return.
 - `commandId`: string — so the agent can still call `get-command-result` afterwards if it wants.
 
 Behavior:
-1. Submit command with markers (same wrapping as `async` without `rawMode`).
-2. Poll `checkCommandStatus` every `pollIntervalMs`.
-3. If the end marker appears → return with `completed`/`error` and the exit code.
-4. If `timeoutSeconds` elapses:
+1. Before sending: record `foregroundBefore = tmux display-message -p -t <paneId> '#{pane_current_command}'`. This anchors what "idle" looks like for this pane (could be `bash`, `zsh`, a nested sub-shell, …).
+2. Submit command with markers (same wrapping as `async` without `rawMode`).
+3. Poll `checkCommandStatus` every `pollIntervalMs`.
+4. If the end marker appears → return with `completed`/`error` and the exit code.
+5. If `timeoutSeconds` elapses:
    - If `interruptOnTimeout === false`: return `timed_out`, leave command running. Agent can still use `commandId`.
-   - Otherwise: send `interruptCount` × `C-c` to the pane with `interruptIntervalMs` between them. Wait `postInterruptWaitMs`. Capture final output (which may now include the end marker with exit code 130). Return `timed_out_interrupted` (with exit code if end marker appeared, `null` otherwise).
+   - Otherwise: send `interruptCount` × `C-c` via `send-keys -t <paneId> C-c` with `interruptIntervalMs` between them. Wait `postInterruptWaitMs`. Then:
+     - Read `foregroundAfter = #{pane_current_command}`.
+     - If `foregroundAfter === foregroundBefore` → kill confirmed → `timed_out_interrupted`.
+     - Else → command ignored SIGINT → `timed_out_still_running`. Agent can escalate (e.g. `kill-pane`, or send `C-\` via `execute-command-async` with `rawMode`).
+
+### Kill detection — why not the end marker?
+
+A natural idea is to check whether the end-marker echo fired after the C-c. It won't: bash aborts the remaining entries of a `;`-separated command list when it receives SIGINT, so `echo "TMUX_MCP_DONE_…"` never runs. We use `pane_current_command` comparison instead.
+
+### Known limitation
+
+If the user's command launches a same-named sub-shell (e.g. `bash` inside `bash`) and C-c fails to kill it, `foregroundBefore === foregroundAfter` would incorrectly report success. Rare; the agent can always verify via `capture-pane` or fall back to `kill-pane`.
 
 Errors:
 - `paneId` out of scope or excluded → scope error (same as other tools).
@@ -124,6 +136,7 @@ Use `send-keys -t <paneId> C-c` — tmux interprets `C-c` as the key sequence, n
   - Deadline hit, interrupt enabled → sends N × C-c, returns `timed_out_interrupted`.
   - Deadline hit, interrupt disabled → returns `timed_out` without sending keys.
 - Integration test against a real tmux session:
-  - `sleep 10` with `timeoutSeconds: 1` → `timed_out_interrupted`, exit code 130.
-  - `echo hi` with `timeoutSeconds: 5` → `completed`, exit code 0, output `hi`.
+  - `sleep 10` with `timeoutSeconds: 1` → `timed_out_interrupted`, `exitCode: null`, `pane_current_command` back to shell.
+  - `echo hi` with `timeoutSeconds: 5` → `completed`, exit code 0, output contains `hi`.
   - `sleep 0.2` with `wait-for-exit` → `completed`.
+  - SIGINT-ignoring command (e.g. `trap '' INT; sleep 10`) with `timeoutSeconds: 1` → `timed_out_still_running`.
