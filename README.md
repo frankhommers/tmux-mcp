@@ -145,7 +145,7 @@ claude mcp add tmux -- npx -y tmux-mcp --include-current-pane
 - `rename-window` - Rename a tmux window
 - `rename-pane` - Rename a tmux pane (set pane title)
 - `execute-command-async` - Fire-and-forget: send a command and return a commandId immediately (supports `rawMode`/`noEnter`)
-- `execute-command-kill-after` - Execute a command and block with a timeout; on timeout, sends Ctrl-C and verifies the kill via `pane_current_command`
+- `execute-command-kill-after` - Execute a command and block with a timeout; uses GNU `timeout`/`gtimeout` if available (kernel-level kill, real exit code), otherwise falls back to sending Ctrl-C and verifying via `pane_current_command`
 - `execute-command-wait-for-exit` - Execute a command and block until it completes (no timeout)
 - `get-command-result` - Get the result of an async command
 - `capture-last-output` - Capture the output of a recent command using OSC 133 marks

@@ -446,6 +446,34 @@ export async function sendInterrupt(paneId: string): Promise<void> {
   await executeTmux(['send-keys', '-t', paneId, 'C-c']);
 }
 
+/**
+ * Detect whether GNU `timeout` (or `gtimeout` on macOS via brew coreutils) is
+ * available on PATH. Result is cached.
+ */
+let cachedTimeoutBinary: string | null | undefined = undefined;
+export async function detectTimeoutBinary(): Promise<string | null> {
+  if (cachedTimeoutBinary !== undefined) return cachedTimeoutBinary;
+  for (const bin of ['timeout', 'gtimeout']) {
+    try {
+      await execFile(bin, ['--version']);
+      cachedTimeoutBinary = bin;
+      return bin;
+    } catch {
+      // try next
+    }
+  }
+  cachedTimeoutBinary = null;
+  return null;
+}
+
+function shellSingleQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+function wrapWithTimeout(command: string, seconds: number, timeoutBin: string): string {
+  return `${timeoutBin} ${seconds}s ${shellConfig.type} -c ${shellSingleQuote(command)}`;
+}
+
 export type BlockingStatus =
   | 'completed'
   | 'error'
@@ -471,8 +499,14 @@ export interface RunBlockingOptions {
 
 /**
  * Submit a command with marker wrapping, then block until completion or timeout.
- * On timeout, optionally sends Ctrl-C sequences and verifies the kill by
- * comparing pane_current_command before and after.
+ *
+ * If GNU `timeout` (or `gtimeout`) is available and a timeout was requested,
+ * wraps the command with it so the kernel handles the kill cleanly. Exit code
+ * 124 (or 137 with --kill-after) signals the timeout fired.
+ *
+ * Falls back to the manual Ctrl-C path when no timeout binary is available.
+ * In that case, kill success is verified by comparing pane_current_command
+ * before and after sending the interrupts.
  */
 export async function runBlocking(
   paneId: string,
@@ -485,21 +519,53 @@ export async function runBlocking(
   const interruptIntervalMs = opts.interruptIntervalMs ?? 200;
   const postInterruptWaitMs = opts.postInterruptWaitMs ?? 500;
 
-  const foregroundBefore = await getPaneCurrentCommand(paneId);
+  const wantsTimeout = opts.timeoutSeconds !== undefined;
+  const timeoutBin = wantsTimeout ? await detectTimeoutBinary() : null;
+  const useTimeoutBinary = wantsTimeout && timeoutBin !== null && interruptOnTimeout;
 
-  const commandId = await executeCommand(paneId, command, false, false);
+  // Foreground snapshot only needed for the C-c fallback path.
+  const foregroundBefore = wantsTimeout && !useTimeoutBinary
+    ? await getPaneCurrentCommand(paneId)
+    : null;
 
-  const deadline = opts.timeoutSeconds !== undefined
-    ? Date.now() + opts.timeoutSeconds * 1000
-    : Number.POSITIVE_INFINITY;
+  const effectiveCommand = useTimeoutBinary
+    ? wrapWithTimeout(command, opts.timeoutSeconds!, timeoutBin!)
+    : command;
+
+  const commandId = await executeCommand(paneId, effectiveCommand, false, false);
+
+  // Polling deadline:
+  // - With timeout binary: generous safety net (timeoutSeconds + 10s) — the
+  //   binary handles the kill, we just wait for the marker to appear.
+  // - With manual fallback: timeoutSeconds is the actual deadline.
+  // - Without any timeout (wait-for-exit): poll forever.
+  let deadline: number;
+  if (useTimeoutBinary) {
+    deadline = Date.now() + (opts.timeoutSeconds! + 10) * 1000;
+  } else if (wantsTimeout) {
+    deadline = Date.now() + opts.timeoutSeconds! * 1000;
+  } else {
+    deadline = Number.POSITIVE_INFINITY;
+  }
 
   while (true) {
     const status = await checkCommandStatus(commandId);
     if (status && status.status !== 'pending') {
+      const exitCode = status.exitCode ?? null;
+      // 124 = SIGTERM from `timeout`; 137 = SIGKILL (via --kill-after, not
+      // currently used but covered for safety).
+      if (useTimeoutBinary && (exitCode === 124 || exitCode === 137)) {
+        return {
+          commandId,
+          status: 'timed_out_interrupted',
+          exitCode,
+          output: status.result ?? '',
+        };
+      }
       return {
         commandId,
         status: status.status === 'completed' ? 'completed' : 'error',
-        exitCode: status.exitCode ?? null,
+        exitCode,
         output: status.result ?? '',
       };
     }
@@ -510,13 +576,20 @@ export async function runBlocking(
     await sleep(Math.min(pollIntervalMs, Math.max(remaining, 0)));
   }
 
-  // Timeout path
+  // Deadline hit without seeing the end marker.
   const partial = await capturePaneContent(paneId, 3000);
 
   if (!interruptOnTimeout) {
     return { commandId, status: 'timed_out', exitCode: null, output: partial };
   }
 
+  if (useTimeoutBinary) {
+    // Marker should have appeared but didn't — `timeout` may have been
+    // bypassed or the shell got stuck. Report still-running honestly.
+    return { commandId, status: 'timed_out_still_running', exitCode: null, output: partial };
+  }
+
+  // Manual C-c fallback path
   for (let i = 0; i < interruptCount; i++) {
     await sendInterrupt(paneId);
     if (i < interruptCount - 1) await sleep(interruptIntervalMs);

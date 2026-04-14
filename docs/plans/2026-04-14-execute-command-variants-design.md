@@ -60,25 +60,39 @@ Returns an object containing:
 - `output`: string — partial pane content captured at the moment of return.
 - `commandId`: string — so the agent can still call `get-command-result` afterwards if it wants.
 
-Behavior:
-1. Before sending: record `foregroundBefore = tmux display-message -p -t <paneId> '#{pane_current_command}'`. This anchors what "idle" looks like for this pane (could be `bash`, `zsh`, a nested sub-shell, …).
-2. Submit command with markers (same wrapping as `async` without `rawMode`).
-3. Poll `checkCommandStatus` every `pollIntervalMs`.
-4. If the end marker appears → return with `completed`/`error` and the exit code.
-5. If `timeoutSeconds` elapses:
-   - If `interruptOnTimeout === false`: return `timed_out`, leave command running. Agent can still use `commandId`.
-   - Otherwise: send `interruptCount` × `C-c` via `send-keys -t <paneId> C-c` with `interruptIntervalMs` between them. Wait `postInterruptWaitMs`. Then:
-     - Read `foregroundAfter = #{pane_current_command}`.
-     - If `foregroundAfter === foregroundBefore` → kill confirmed → `timed_out_interrupted`.
-     - Else → command ignored SIGINT → `timed_out_still_running`. Agent can escalate (e.g. `kill-pane`, or send `C-\` via `execute-command-async` with `rawMode`).
+Behavior depends on whether GNU `timeout` (or `gtimeout` from macOS coreutils) is available on PATH. Detection runs once at first use and is cached.
 
-### Kill detection — why not the end marker?
+**Path A — `timeout` binary available (preferred):**
+1. Wrap the user command as `<bin> <N>s <shell> -c '<escaped command>'`. The shell is chosen from `shellConfig.type` (bash/zsh/fish), so the user's command is parsed by a sub-shell of the same family. Single quotes in the command are escaped via `'\''`.
+2. Submit the wrapped command with markers (`echo START; <wrapped>; echo DONE_$?`).
+3. Poll `checkCommandStatus` every `pollIntervalMs`. Safety deadline = `timeoutSeconds + 10s`.
+4. End marker fires either way (timeout's SIGTERM kills the inner command, the outer bash command-list continues to the `echo DONE_$?`):
+   - Exit code `124` → kernel killed via SIGTERM → `timed_out_interrupted`.
+   - Exit code `137` → SIGKILL fallback → `timed_out_interrupted`.
+   - Other → `completed`/`error` with the real exit code.
+5. If safety deadline hits without seeing the marker → `timed_out_still_running` (something bypassed timeout; agent should escalate).
 
-A natural idea is to check whether the end-marker echo fired after the C-c. It won't: bash aborts the remaining entries of a `;`-separated command list when it receives SIGINT, so `echo "TMUX_MCP_DONE_…"` never runs. We use `pane_current_command` comparison instead.
+**Path B — no `timeout` binary (fallback, manual C-c):**
+1. Record `foregroundBefore = #{pane_current_command}` to anchor what "idle" looks like for this pane.
+2. Submit command unwrapped (markers only).
+3. Poll until end marker or `timeoutSeconds` elapses.
+4. On marker → `completed`/`error`.
+5. On timeout:
+   - If `interruptOnTimeout=false`: return `timed_out`, leave running.
+   - Otherwise: send `interruptCount` × `C-c` with `interruptIntervalMs` between, wait `postInterruptWaitMs`. Compare `pane_current_command` after vs before — match means kill succeeded (`timed_out_interrupted`); mismatch means command ignored SIGINT (`timed_out_still_running`).
 
-### Known limitation
+### Why two paths?
 
-If the user's command launches a same-named sub-shell (e.g. `bash` inside `bash`) and C-c fails to kill it, `foregroundBefore === foregroundAfter` would incorrectly report success. Rare; the agent can always verify via `capture-pane` or fall back to `kill-pane`.
+`timeout` is reliable, kernel-level, and yields a real exit code. But it's not in macOS base; coreutils via Homebrew installs it as `gtimeout`. Falling back keeps the tool usable on stock macOS.
+
+### Why the C-c fallback can't read the exit code
+
+Bash's behavior on SIGINT in a `;`-list is version-dependent: sometimes the `echo DONE_$?` runs (giving exit 130), sometimes not. We don't rely on it — `pane_current_command` comparison is the source of truth in the fallback path. Exit code is reported as `null`.
+
+### Known limitations
+
+- **Path A** loses the interactive shell context (aliases, functions defined at the prompt) because the command runs in a fresh sub-shell. Standalone commands work fine.
+- **Path B** can't distinguish a same-named nested sub-shell (e.g. user starts `bash` inside `bash`, C-c doesn't kill it). Rare; agent can verify via `capture-pane` or fall back to `kill-pane`.
 
 Errors:
 - `paneId` out of scope or excluded → scope error (same as other tools).

@@ -587,7 +587,7 @@ function formatBlockingResult(res: tmux.BlockingResult): string {
 // Execute command, block with timeout, kill on timeout - Tool
 server.tool(
   "execute-command-kill-after",
-  "Execute a command and block until it completes OR the timeout elapses. On timeout, sends Ctrl-C sequences to the pane and verifies the kill by comparing pane_current_command before/after. Returns one of: 'completed', 'error', 'timed_out' (if interruptOnTimeout=false), 'timed_out_interrupted' (kill confirmed), or 'timed_out_still_running' (command ignored SIGINT). Does not support rawMode/noEnter.",
+  "Execute a command and block until it completes OR the timeout elapses. Uses GNU `timeout`/`gtimeout` if available (kernel-level kill, real exit code 124 or 137); otherwise falls back to sending Ctrl-C sequences and verifying the kill via pane_current_command. Returns one of: 'completed', 'error', 'timed_out' (if interruptOnTimeout=false), 'timed_out_interrupted' (kill confirmed), or 'timed_out_still_running' (command resisted the interrupt). Does not support rawMode/noEnter.",
   {
     paneId: z.string().describe("ID of the tmux pane"),
     command: z.string().describe("Command to execute"),
