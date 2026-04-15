@@ -185,3 +185,12 @@ export function isExcludedPane(paneId: string): boolean {
 export function getExcludedPaneId(): string | null {
   return excludedPaneId;
 }
+
+/**
+ * Get the agent's own pane ID from $TMUX_PANE.
+ * Unlike getExcludedPaneId(), this always returns the pane ID
+ * regardless of the exclude-self setting.
+ */
+export function getSelfPaneId(): string | null {
+  return process.env.TMUX_PANE || null;
+}

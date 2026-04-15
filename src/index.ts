@@ -5,7 +5,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as tmux from "./tmux.js";
-import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId } from "./scope.js";
+import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId } from "./scope.js";
 
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
@@ -517,7 +517,7 @@ server.tool(
         paneToSplit = targetPaneId;
       } else {
         // No target: use the agent's own pane from $TMUX_PANE
-        const selfPane = getExcludedPaneId() || process.env.TMUX_PANE;
+        const selfPane = getSelfPaneId();
         if (!selfPane) {
           return {
             content: [{ type: "text", text: "Cannot determine own pane: $TMUX_PANE is not set. Specify targetPaneId explicitly." }],
