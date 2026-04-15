@@ -1105,6 +1105,114 @@ server.tool(
   }
 );
 
+// ── wait-for-pane-content ──────────────────────────────────────────────
+server.tool(
+  "wait-for-pane-content",
+  "Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Useful for waiting until a command produces specific output, a server becomes ready, or a prompt returns.",
+  {
+    paneId: z.string().describe("ID of the tmux pane"),
+    text: z.string().describe("Text or regex pattern to wait for"),
+    regex: z.boolean().optional().describe("Interpret 'text' as a regular expression. Default: false"),
+    timeoutSeconds: z.number().positive().describe("Maximum seconds to wait before returning a timeout error"),
+    pollIntervalMs: z.number().positive().optional().describe("How often to check pane content in milliseconds. Default: 500"),
+    lines: z.string().optional().describe("Number of lines to capture from the pane. Default: visible pane content")
+  },
+  async ({ paneId, text, regex, timeoutSeconds, pollIntervalMs, lines }) => {
+    try {
+      if (isExcludedPane(paneId)) {
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
+      }
+      await assertInScope(paneId, 'pane');
+
+      if (regex) {
+        try { new RegExp(text); } catch (e: any) {
+          return { content: [{ type: "text", text: `Invalid regex pattern: ${e.message}` }], isError: true };
+        }
+      }
+
+      const linesCount = lines ? parseInt(lines, 10) : undefined;
+      const result = await tmux.waitForPaneContent(paneId, text, {
+        regex,
+        timeoutSeconds,
+        pollIntervalMs,
+        lines: linesCount,
+      });
+
+      if (result.found) {
+        return { content: [{ type: "text", text: `Found: ${result.matchedLine}` }] };
+      } else {
+        return { content: [{ type: "text", text: `Timeout after ${timeoutSeconds}s: pattern not found in pane content` }], isError: true };
+      }
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error waiting for pane content: ${error}` }], isError: true };
+    }
+  }
+);
+
+// ── wait-for-pane-content-gone ─────────────────────────────────────────
+server.tool(
+  "wait-for-pane-content-gone",
+  "Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals. Checks only the visible content controlled by the 'lines' parameter, not full scrollback history. Text that has scrolled out of the capture window is considered 'gone'.",
+  {
+    paneId: z.string().describe("ID of the tmux pane"),
+    text: z.string().describe("Text or regex pattern to wait for to disappear"),
+    regex: z.boolean().optional().describe("Interpret 'text' as a regular expression. Default: false"),
+    timeoutSeconds: z.number().positive().describe("Maximum seconds to wait before returning a timeout error"),
+    pollIntervalMs: z.number().positive().optional().describe("How often to check pane content in milliseconds. Default: 500"),
+    lines: z.string().optional().describe("Number of lines to capture from the pane. Default: visible pane content")
+  },
+  async ({ paneId, text, regex, timeoutSeconds, pollIntervalMs, lines }) => {
+    try {
+      if (isExcludedPane(paneId)) {
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
+      }
+      await assertInScope(paneId, 'pane');
+
+      if (regex) {
+        try { new RegExp(text); } catch (e: any) {
+          return { content: [{ type: "text", text: `Invalid regex pattern: ${e.message}` }], isError: true };
+        }
+      }
+
+      const linesCount = lines ? parseInt(lines, 10) : undefined;
+      const result = await tmux.waitForPaneContentGone(paneId, text, {
+        regex,
+        timeoutSeconds,
+        pollIntervalMs,
+        lines: linesCount,
+      });
+
+      if (result.gone) {
+        return { content: [{ type: "text", text: "Pattern no longer found in pane content" }] };
+      } else {
+        return { content: [{ type: "text", text: `Timeout after ${timeoutSeconds}s: pattern still present in pane content` }], isError: true };
+      }
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error waiting for pane content gone: ${error}` }], isError: true };
+    }
+  }
+);
+
+// ── sleep ──────────────────────────────────────────────────────────────
+server.tool(
+  "sleep",
+  "Wait for a specified number of seconds. No pane interaction. Useful as a delay between operations.",
+  {
+    seconds: z.number().describe("Number of seconds to wait. Must be greater than 0")
+  },
+  async ({ seconds }) => {
+    try {
+      if (seconds <= 0) {
+        return { content: [{ type: "text", text: "Error: seconds must be greater than 0" }], isError: true };
+      }
+      await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+      return { content: [{ type: "text", text: `Slept for ${seconds}s` }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error during sleep: ${error}` }], isError: true };
+    }
+  }
+);
+
 /**
  * Disable tools that are not applicable for the current scope mode.
  * Called once at startup after initScope().
