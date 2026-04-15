@@ -5,7 +5,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as tmux from "./tmux.js";
-import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane } from "./scope.js";
+import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId } from "./scope.js";
 
 // Create MCP server
 const server = new McpServer({
@@ -175,11 +175,18 @@ server.tool(
     try {
       await assertInScope(windowId, 'window');
       let panes = await tmux.listPanes(windowId);
-      panes = panes.filter(p => !isExcludedPane(p.id));
+      // Mark the agent's own pane so agents know it exists (e.g. for splitting),
+      // even though they cannot interact with its content (capture, execute, etc.).
+      const result = panes.map(p => {
+        if (isExcludedPane(p.id)) {
+          return { ...p, self: true };
+        }
+        return p;
+      });
       return {
         content: [{
           type: "text",
-          text: JSON.stringify(panes, null, 2)
+          text: JSON.stringify(result, null, 2)
         }]
       };
     } catch (error) {
@@ -206,7 +213,7 @@ server.tool(
   async ({ paneId, lines, colors }) => {
     try {
       if (isExcludedPane(paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
       // Parse lines parameter if provided
@@ -393,7 +400,7 @@ server.tool(
   async ({ paneId, name }) => {
     try {
       if (isExcludedPane(paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
       await tmux.renamePane(paneId, name);
@@ -425,7 +432,7 @@ server.tool(
   async ({ paneId }) => {
     try {
       if (isExcludedPane(paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
       await tmux.killPane(paneId);
@@ -458,9 +465,10 @@ server.tool(
   },
   async ({ paneId, direction, size }) => {
     try {
-      if (isExcludedPane(paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
-      }
+      // Allow splitting the excluded (self) pane: splitting doesn't interact
+      // with the pane's content — it only creates a new sibling pane in the
+      // same window. This is essential for scope=window when the agent's pane
+      // is the only pane in the window (otherwise the agent has no pane to split).
       await assertInScope(paneId, 'pane');
       const newPane = await tmux.splitPane(paneId, direction || 'vertical', size);
       return {
@@ -476,6 +484,65 @@ server.tool(
         content: [{
           type: "text",
           text: `Error splitting pane: ${error}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// New pane - Tool
+// Convenience tool that creates a new pane without requiring a target pane ID.
+// When no target is specified, it splits the agent's own pane (detected via
+// $TMUX_PANE). This solves the bootstrapping problem in scope=window: the agent
+// can always create a new pane even when its own pane is the only one in the window.
+server.tool(
+  "new-pane",
+  "Create a new tmux pane by splitting an existing pane. When no target pane is specified, splits the agent's own pane. Returns the new pane's ID. This is the easiest way to create a new pane, especially when running in scoped mode.",
+  {
+    targetPaneId: z.string().optional().describe("ID of the pane to split. If omitted, splits the agent's own pane (detected via $TMUX_PANE)."),
+    direction: z.enum(["horizontal", "vertical"]).optional().describe("Split direction: 'horizontal' (side by side) or 'vertical' (top/bottom). Default is 'vertical'"),
+    size: z.number().min(1).max(99).optional().describe("Size of the new pane as percentage (1-99). Default is 50%")
+  },
+  async ({ targetPaneId, direction, size }) => {
+    try {
+      // Determine which pane to split
+      let paneToSplit: string;
+      if (targetPaneId) {
+        // Explicit target: must be in scope (but allow excluded/self pane for splitting)
+        await assertInScope(targetPaneId, 'pane');
+        paneToSplit = targetPaneId;
+      } else {
+        // No target: use the agent's own pane from $TMUX_PANE
+        const selfPane = getExcludedPaneId() || process.env.TMUX_PANE;
+        if (!selfPane) {
+          return {
+            content: [{ type: "text", text: "Cannot determine own pane: $TMUX_PANE is not set. Specify targetPaneId explicitly." }],
+            isError: true
+          };
+        }
+        paneToSplit = selfPane;
+      }
+
+      const newPane = await tmux.splitPane(paneToSplit, direction || 'vertical', size);
+      if (newPane) {
+        return {
+          content: [{
+            type: "text",
+            text: `New pane created successfully: ${JSON.stringify(newPane, null, 2)}`
+          }]
+        };
+      } else {
+        return {
+          content: [{ type: "text", text: `Failed to create new pane (split of ${paneToSplit} returned no result).` }],
+          isError: true
+        };
+      }
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `Error creating new pane: ${error}`
         }],
         isError: true
       };
@@ -533,7 +600,7 @@ server.tool(
   async ({ paneId, command, rawMode, noEnter, suppressHistory }) => {
     try {
       if (isExcludedPane(paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
       const effectiveRawMode = noEnter || rawMode;
@@ -607,7 +674,7 @@ server.tool(
   async (args) => {
     try {
       if (isExcludedPane(args.paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(args.paneId, 'pane');
       const result = await tmux.runBlocking(args.paneId, args.command, {
@@ -639,7 +706,7 @@ server.tool(
   async ({ paneId, command, pollIntervalMs, suppressHistory }) => {
     try {
       if (isExcludedPane(paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
       const result = await tmux.runBlocking(paneId, command, { pollIntervalMs, suppressHistory });
@@ -713,7 +780,7 @@ server.tool(
   async ({ paneId, n }) => {
     try {
       if (isExcludedPane(paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
       const output = await tmux.captureLastOutput(paneId, n ?? 1);
@@ -746,7 +813,7 @@ server.tool(
   async ({ paneId, n }) => {
     try {
       if (isExcludedPane(paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
       const command = await tmux.captureLastCommand(paneId, n ?? 1);
@@ -837,13 +904,16 @@ server.resource(
           for (const window of windows) {
             const panes = await tmux.listPanes(window.id);
 
-            // For each pane, create a resource with descriptive name (excluding self)
+            // Include the agent's own pane in the listing so agents know it exists
+            // (e.g. for splitting), even though its content is not readable.
             for (const pane of panes) {
-              if (isExcludedPane(pane.id)) continue;
+              const isSelf = isExcludedPane(pane.id);
               paneResources.push({
-                name: `Pane: ${session.name} - ${pane.id} - ${pane.title} ${pane.active ? "(active)" : ""}`,
+                name: `Pane: ${session.name} - ${pane.id} - ${pane.title} ${pane.active ? "(active)" : ""}${isSelf ? " (self)" : ""}`,
                 uri: `tmux://pane/${pane.id}`,
-                description: `Content from pane ${pane.id} - ${pane.title} in session ${session.name}`
+                description: isSelf
+                  ? `Agent's own pane ${pane.id} in session ${session.name} (content not readable, but can be split)`
+                  : `Content from pane ${pane.id} - ${pane.title} in session ${session.name}`
               });
             }
           }
@@ -867,7 +937,7 @@ server.resource(
       // Ensure paneId is a string
       const paneIdStr = Array.isArray(paneId) ? paneId[0] : paneId;
       if (isExcludedPane(paneIdStr)) {
-        return { contents: [{ uri: uri.href, text: `Access denied: pane ${paneIdStr} is the agent's own pane and is excluded.` }] };
+        return { contents: [{ uri: uri.href, text: `Access denied: pane ${paneIdStr} is the agent's own pane and cannot be interacted with.` }] };
       }
       await assertInScope(paneIdStr, 'pane');
       // Default to no colors for resources to maintain clean programmatic access
@@ -975,7 +1045,7 @@ server.tool(
   async (args) => {
     try {
       if (isExcludedPane(args.paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(args.paneId, 'pane');
       const result = await tmux.uploadFile({
@@ -1009,7 +1079,7 @@ server.tool(
   async (args) => {
     try {
       if (isExcludedPane(args.paneId)) {
-        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and is excluded.` }], isError: true };
+        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(args.paneId, 'pane');
       const result = await tmux.downloadFile({
