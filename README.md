@@ -8,6 +8,7 @@ Model Context Protocol server that enables AI assistants to interact with and vi
 - View and navigate tmux windows and panes
 - Capture and expose terminal content from any pane
 - Execute commands in tmux panes and retrieve results (use it at your own risk ⚠️)
+- Wait for specific content to appear or disappear in pane output
 - Create new tmux sessions and windows
 - Split panes horizontally or vertically with customizable sizes
 - Kill tmux sessions, windows, and panes
@@ -212,6 +213,37 @@ Or in JSON config:
 - `move-window` - Move a tmux window to a different index or session
 - `file-upload` - Upload a file or inline content to a tmux pane (gzip+base64 encoded, works over SSH/docker)
 - `file-download` - Download a file from a tmux pane to the local host or return its content
+- `wait-for-pane-content` - Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals
+- `wait-for-pane-content-gone` - Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals
+- `sleep` - Wait for a specified number of seconds. No pane interaction
+
+### Running Label
+
+Tracked commands (`execute-command-async`, `execute-command-kill-after`, `execute-command-wait-for-exit`) display a human-readable label in the pane output before the command executes:
+
+```
+# Running: npm test
+```
+
+When a timeout is configured (`execute-command-kill-after`), the label includes it:
+
+```
+# Running: npm test (timeout: 30s)
+```
+
+This makes it easy to see at a glance what command is running in each pane and whether it has a timeout.
+
+### Wait-for-pane-content Tools
+
+The `wait-for-pane-content` and `wait-for-pane-content-gone` tools poll the currently visible pane content at regular intervals, waiting for a text string or regex pattern to appear or disappear.
+
+**Parameters:**
+- `paneId` (string, required) - Target pane ID (e.g. `%0`)
+- `text` (string, required) - The text or regex pattern to match
+- `regex` (boolean, optional) - Treat `text` as a regular expression. Defaults to `false`
+- `timeoutSeconds` (number, required) - Maximum seconds to wait before giving up
+- `pollIntervalMs` (number, optional) - How often to check the pane content in milliseconds
+- `lines` (number, optional) - Number of lines to capture from the pane for matching
 
 ### OSC 133 Shell Integration
 
