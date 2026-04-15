@@ -156,6 +156,31 @@ By default the agent's own pane (detected via `$TMUX_PANE`) is excluded from all
 claude mcp add tmux -- npx --prefer-online -y tmux-mcp --include-current-pane
 ```
 
+### Default split direction
+
+The `split-pane` and `new-pane` tools default to `horizontal` (side by side) when no direction is specified. Use `--default-split-direction` to change this:
+
+```sh
+claude mcp add tmux -- npx --prefer-online -y tmux-mcp --default-split-direction=vertical
+```
+
+Or via environment variable:
+
+```sh
+export TMUX_MCP_DEFAULT_SPLIT_DIRECTION=vertical
+```
+
+Or in JSON config:
+
+```json
+"mcpServers": {
+  "tmux": {
+    "command": "npx",
+    "args": ["--prefer-online", "-y", "tmux-mcp", "--default-split-direction=vertical"]
+  }
+}
+```
+
 ## Available Resources
 
 - `tmux://sessions` - List all tmux sessions

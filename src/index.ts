@@ -7,6 +7,9 @@ import { z } from "zod";
 import * as tmux from "./tmux.js";
 import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId } from "./scope.js";
 
+// Default split direction for split-pane and new-pane tools
+let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
+
 // Create MCP server
 const server = new McpServer({
   name: "tmux-mcp",
@@ -460,7 +463,7 @@ server.tool(
   "Split a tmux pane horizontally or vertically",
   {
     paneId: z.string().describe("ID of the tmux pane to split"),
-    direction: z.enum(["horizontal", "vertical"]).optional().describe("Split direction: 'horizontal' (side by side) or 'vertical' (top/bottom). Default is 'vertical'"),
+    direction: z.enum(["horizontal", "vertical"]).optional().describe("Split direction: 'horizontal' (side by side) or 'vertical' (top/bottom). Defaults to server's --default-split-direction (horizontal if not set)"),
     size: z.number().min(1).max(99).optional().describe("Size of the new pane as percentage (1-99). Default is 50%")
   },
   async ({ paneId, direction, size }) => {
@@ -470,7 +473,7 @@ server.tool(
       // same window. This is essential for scope=window when the agent's pane
       // is the only pane in the window (otherwise the agent has no pane to split).
       await assertInScope(paneId, 'pane');
-      const newPane = await tmux.splitPane(paneId, direction || 'vertical', size);
+      const newPane = await tmux.splitPane(paneId, direction || defaultSplitDirection, size);
       return {
         content: [{
           type: "text",
@@ -501,7 +504,7 @@ server.tool(
   "Create a new tmux pane by splitting an existing pane. When no target pane is specified, splits the agent's own pane. Returns the new pane's ID. This is the easiest way to create a new pane, especially when running in scoped mode.",
   {
     targetPaneId: z.string().optional().describe("ID of the pane to split. If omitted, splits the agent's own pane (detected via $TMUX_PANE)."),
-    direction: z.enum(["horizontal", "vertical"]).optional().describe("Split direction: 'horizontal' (side by side) or 'vertical' (top/bottom). Default is 'vertical'"),
+    direction: z.enum(["horizontal", "vertical"]).optional().describe("Split direction: 'horizontal' (side by side) or 'vertical' (top/bottom). Defaults to server's --default-split-direction (horizontal if not set)"),
     size: z.number().min(1).max(99).optional().describe("Size of the new pane as percentage (1-99). Default is 50%")
   },
   async ({ targetPaneId, direction, size }) => {
@@ -524,7 +527,7 @@ server.tool(
         paneToSplit = selfPane;
       }
 
-      const newPane = await tmux.splitPane(paneToSplit, direction || 'vertical', size);
+      const newPane = await tmux.splitPane(paneToSplit, direction || defaultSplitDirection, size);
       if (newPane) {
         return {
           content: [{
@@ -1129,7 +1132,8 @@ async function main() {
     const { values } = parseArgs({
       options: {
         'scope': { type: 'string' },
-        'include-current-pane': { type: 'boolean', default: false }
+        'include-current-pane': { type: 'boolean', default: false },
+        'default-split-direction': { type: 'string' }
       }
     });
 
@@ -1142,6 +1146,16 @@ async function main() {
 
     // Initialize exclude-self (excludes the agent's own pane by default)
     initExcludeSelf(values['include-current-pane'] as boolean);
+
+    // Initialize default split direction
+    const splitDir = values['default-split-direction'] ?? process.env.TMUX_MCP_DEFAULT_SPLIT_DIRECTION;
+    if (splitDir) {
+      if (splitDir !== 'horizontal' && splitDir !== 'vertical') {
+        console.error(`Invalid --default-split-direction: '${splitDir}'. Must be 'horizontal' or 'vertical'.`);
+        process.exit(1);
+      }
+      defaultSplitDirection = splitDir;
+    }
 
     // Start the MCP server
     const transport = new StdioServerTransport();
