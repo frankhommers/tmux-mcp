@@ -524,6 +524,13 @@ export interface RunBlockingOptions {
   suppressHistory?: boolean;      // prepend space to dodge history (bash/zsh w/ ignorespace)
 }
 
+export interface WaitForPaneContentOptions {
+  regex?: boolean;
+  timeoutSeconds: number;
+  pollIntervalMs?: number;
+  lines?: number;
+}
+
 /**
  * Submit a command with marker wrapping, then block until completion or timeout.
  *
@@ -956,5 +963,87 @@ export async function downloadFile(opts: FileDownloadOptions): Promise<FileDownl
     content: rawBuffer.toString('utf-8'),
     bytesTransferred,
   };
+}
+
+/**
+ * Shared polling helper for waitForPaneContent and waitForPaneContentGone.
+ * Polls pane content until the pattern appears ('appear' mode) or disappears
+ * ('disappear' mode).
+ */
+async function pollPaneContent(
+  paneId: string,
+  pattern: string,
+  options: WaitForPaneContentOptions,
+  mode: 'appear' | 'disappear'
+): Promise<{ matched: boolean; matchedLine?: string }> {
+  const pollInterval = options.pollIntervalMs ?? 500;
+  const deadline = Date.now() + options.timeoutSeconds * 1000;
+
+  let matcher: RegExp | null = null;
+  if (options.regex) {
+    try {
+      matcher = new RegExp(pattern);
+    } catch (e: any) {
+      throw new Error(`Invalid regex pattern "${pattern}": ${e.message}`);
+    }
+  }
+
+  while (Date.now() < deadline) {
+    const content = await capturePaneContent(paneId, options.lines ?? 200);
+    const lines = content.split('\n');
+
+    let foundLine: string | undefined;
+    for (const line of lines) {
+      if (matcher ? matcher.test(line) : line.includes(pattern)) {
+        foundLine = line;
+        break;
+      }
+    }
+
+    if (mode === 'appear' && foundLine !== undefined) {
+      return { matched: true, matchedLine: foundLine };
+    }
+    if (mode === 'disappear' && foundLine === undefined) {
+      return { matched: true };
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.max(Math.min(pollInterval, remaining), 0));
+  }
+
+  return { matched: false };
+}
+
+/**
+ * Poll pane content until a text or regex pattern appears.
+ * Returns `{ found: true, matchedLine }` on success, or `{ found: false }` on timeout.
+ */
+export async function waitForPaneContent(
+  paneId: string,
+  pattern: string,
+  options: WaitForPaneContentOptions
+): Promise<{ found: true; matchedLine: string } | { found: false }> {
+  const result = await pollPaneContent(paneId, pattern, options, 'appear');
+  if (result.matched) {
+    return { found: true, matchedLine: result.matchedLine! };
+  }
+  return { found: false };
+}
+
+/**
+ * Poll pane content until a text or regex pattern disappears.
+ * Returns `{ gone: true }` when the pattern is no longer found, or `{ gone: false }` on timeout.
+ */
+export async function waitForPaneContentGone(
+  paneId: string,
+  pattern: string,
+  options: WaitForPaneContentOptions
+): Promise<{ gone: true } | { gone: false }> {
+  const result = await pollPaneContent(paneId, pattern, options, 'disappear');
+  if (result.matched) {
+    return { gone: true };
+  }
+  return { gone: false };
 }
 
