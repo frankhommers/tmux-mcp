@@ -480,15 +480,21 @@ function buildWrappedCommand(
   const startMarker = getStartMarkerText(command);
   const endMarker = getEndMarkerText(command);
 
+  // Human-readable label so the user can see what command is running.
+  // Single-quoted to prevent shell expansion; inner single quotes are escaped.
+  const timeoutLabel = timeoutSeconds !== undefined ? ` (timeout: ${timeoutSeconds}s)` : '';
+  const runningLabel = `echo ${shellSingleQuote(`# Running: ${userCmd}${timeoutLabel}`)}; `;
+
   let body: string;
   if (timeoutSeconds === undefined) {
-    body = `echo "${startMarker}"; ${userCmd}; echo "${endMarker}"`;
+    body = `${runningLabel}echo "${startMarker}"; ${userCmd}; echo "${endMarker}"`;
   } else {
     // Assign userCmd to a shell variable using a single-quoted literal so the
     // outer sh doesn't expand or re-parse it. `'` inside userCmd is escaped as
     // `'\''`. The inner `sh -c "$U"` then receives the exact user command.
     const userCmdSQ = "'" + userCmd.replace(/'/g, "'\\''") + "'";
     body =
+      `${runningLabel}` +
       `U=${userCmdSQ}; ` +
       `echo "${startMarker}"; ` +
       `T=$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null); ` +
