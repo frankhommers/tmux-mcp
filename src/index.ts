@@ -13,7 +13,7 @@ let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
 // Create MCP server
 const server = new McpServer({
   name: "tmux-mcp",
-  version: "0.2.2"
+  version: "0.2.3"
 }, {
   capabilities: {
     resources: {
