@@ -26,93 +26,57 @@ Check out this short video to get excited!
 
 ## Usage
 
-### Claude Code
+### Installation
+
+Run the MCP server via npx:
 
 ```sh
-claude mcp add tmux -- npx --prefer-online -y tmux-mcp
+npx --prefer-online -y github:frankhommers/tmux-mcp
 ```
 
-### Codex
+The `--prefer-online` flag tells npx to check for updates instead of using a stale cached version. The `-y` flag skips the install confirmation prompt.
+
+To register it with an MCP client, the exact command depends on the client. For example, with Claude Code:
 
 ```sh
-codex mcp add tmux -- npx --prefer-online -y tmux-mcp
+claude mcp add tmux -- npx --prefer-online -y github:frankhommers/tmux-mcp
 ```
 
-### Gemini CLI
-
-```sh
-gemini mcp add tmux npx --prefer-online -y tmux-mcp
-```
-
-### Claude Desktop
-
-Add this MCP server to your Claude Desktop configuration:
-
-```json
-"mcpServers": {
-  "tmux": {
-    "command": "npx",
-    "args": ["--prefer-online", "-y", "tmux-mcp"]
-  }
-}
-```
-
-### Installing from a GitHub fork
-
-If you want to run a fork or a specific branch instead of the published npm package, you can install directly from GitHub. The `prepare` script automatically compiles TypeScript on install.
-
-#### Claude Code
-
-```sh
-claude mcp add tmux -- npx github:frankhommers/tmux-mcp
-```
-
-#### Codex / OpenCode
-
-```sh
-# Codex
-codex mcp add tmux -- npx github:frankhommers/tmux-mcp
-
-# OpenCode (opencode.json)
-```
+For clients that use a JSON configuration file (e.g. Claude Desktop, OpenCode):
 
 ```json
 {
   "mcpServers": {
     "tmux": {
-      "command": "npm",
-      "args": ["exec", "github:frankhommers/tmux-mcp"]
+      "command": "npx",
+      "args": ["--prefer-online", "-y", "github:frankhommers/tmux-mcp"]
     }
   }
 }
 ```
 
-#### Gemini CLI
-
-```sh
-gemini mcp add tmux npx github:frankhommers/tmux-mcp
-```
-
-#### Claude Desktop
-
-```json
-"mcpServers": {
-  "tmux": {
-    "command": "npx",
-    "args": ["github:frankhommers/tmux-mcp"]
-  }
-}
-```
-
-> **Note:** `npx` / `npm exec` caches the GitHub-installed package. After pushing new commits you need to clear the cache to pick up changes:
+> **Note:** Even with `--prefer-online`, npx may sometimes serve a stale cached version. To force a clean fetch, clear the cache and restart the MCP client:
 >
 > ```sh
 > ./scripts/clear-npx-cache.sh
 > ```
->
-> Then restart the MCP client so it fetches and builds the latest version.
 
-### Scope
+### Configuration
+
+Append flags after the package name to configure the server:
+
+```sh
+npx --prefer-online -y github:frankhommers/tmux-mcp --scope=session --default-split-direction=vertical
+```
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--scope=none\|session\|window` | `TMUX_MCP_SCOPE` | `none` | Restrict access to a specific scope (see below) |
+| `--include-current-pane` | — | excluded | Allow the agent to interact with its own pane |
+| `--default-split-direction=horizontal\|vertical` | `TMUX_MCP_DEFAULT_SPLIT_DIRECTION` | `horizontal` | Default direction for `split-pane` and `new-pane` |
+| `--shell-type=bash\|zsh\|fish` (`-s`) | — | — | Shell type for the target pane |
+
+#### Scope
 
 By default the MCP server has unrestricted access to all tmux sessions, windows and panes. Use `--scope` to limit what the agent can see and do:
 
@@ -123,64 +87,6 @@ By default the MCP server has unrestricted access to all tmux sessions, windows 
 | `window` | Only the window the server runs in | `create-session`, `create-window`, `kill-window`, `move-window` |
 
 Tools that fall outside the active scope are **removed from the tool list** — the LLM never sees them. Remaining tools that accept an ID (like `capture-pane` or `execute-command-async`) still validate that the target is within the allowed scope at runtime.
-
-```sh
-# Session scope
-claude mcp add tmux -- npx --prefer-online -y tmux-mcp --scope=session
-
-# Window scope — agent can only split panes in its own window
-claude mcp add tmux -- npx --prefer-online -y tmux-mcp --scope=window
-```
-
-Or via environment variable:
-
-```sh
-export TMUX_MCP_SCOPE=window
-```
-
-Or in JSON config:
-
-```json
-"mcpServers": {
-  "tmux": {
-    "command": "npx",
-    "args": ["--prefer-online", "-y", "tmux-mcp", "--scope=window"]
-  }
-}
-```
-
-### Exclude current pane
-
-By default the agent's own pane (detected via `$TMUX_PANE`) is excluded from all operations, preventing the agent from interacting with itself. Pass `--include-current-pane` to disable this:
-
-```sh
-claude mcp add tmux -- npx --prefer-online -y tmux-mcp --include-current-pane
-```
-
-### Default split direction
-
-The `split-pane` and `new-pane` tools default to `horizontal` (side by side) when no direction is specified. Use `--default-split-direction` to change this:
-
-```sh
-claude mcp add tmux -- npx --prefer-online -y tmux-mcp --default-split-direction=vertical
-```
-
-Or via environment variable:
-
-```sh
-export TMUX_MCP_DEFAULT_SPLIT_DIRECTION=vertical
-```
-
-Or in JSON config:
-
-```json
-"mcpServers": {
-  "tmux": {
-    "command": "npx",
-    "args": ["--prefer-online", "-y", "tmux-mcp", "--default-split-direction=vertical"]
-  }
-}
-```
 
 ## Available Resources
 
