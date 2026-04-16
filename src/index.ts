@@ -598,7 +598,7 @@ server.tool(
     command: z.string().describe("Command to execute"),
     rawMode: z.boolean().optional().describe("Execute command without wrapper markers for REPL/interactive compatibility. Disables get-command-result status tracking. Use capture-pane after execution to verify command outcome."),
     noEnter: z.boolean().optional().describe("Send keystrokes without pressing Enter. For TUI navigation in apps like btop, vim, less. Supports special keys (Up, Down, Escape, Tab, etc.), modifier key sequences (C-c, C-z, C-d, M-a, etc.), and strings (sent char-by-char for proper filtering). Automatically applies rawMode. Use capture-pane after to see results."),
-    suppressHistory: z.boolean().optional().describe("Prepend a single space to the command line so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding it to history. No effect on shells without that option or when rawMode/noEnter are set.")
+    suppressHistory: z.boolean().optional().describe("Prepend a single space to the command line so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding it to history. Default: true. Set to false to allow the command to appear in shell history. No effect when rawMode/noEnter are set.")
   },
   async ({ paneId, command, rawMode, noEnter, suppressHistory }) => {
     try {
@@ -672,7 +672,7 @@ server.tool(
     interruptCount: z.number().int().positive().optional().describe("How many Ctrl-C's to send. Default: 3"),
     interruptIntervalMs: z.number().nonnegative().optional().describe("Delay between Ctrl-C's. Default: 200"),
     postInterruptWaitMs: z.number().nonnegative().optional().describe("Wait time after last Ctrl-C before capturing final output and checking kill. Default: 500"),
-    suppressHistory: z.boolean().optional().describe("Prepend a single space so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding the line to history."),
+    suppressHistory: z.boolean().optional().describe("Prepend a single space so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding the line to history. Default: true."),
   },
   async (args) => {
     try {
@@ -704,7 +704,7 @@ server.tool(
     paneId: z.string().describe("ID of the tmux pane"),
     command: z.string().describe("Command to execute"),
     pollIntervalMs: z.number().positive().optional().describe("How often to check for completion. Default: 500"),
-    suppressHistory: z.boolean().optional().describe("Prepend a single space so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding the line to history."),
+    suppressHistory: z.boolean().optional().describe("Prepend a single space so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding the line to history. Default: true."),
   },
   async ({ paneId, command, pollIntervalMs, suppressHistory }) => {
     try {
@@ -1043,7 +1043,7 @@ server.tool(
     sourcePath: z.string().optional().describe("Local file path on the MCP host. Either sourcePath or content must be provided."),
     content: z.string().optional().describe("Inline text content to upload. Either sourcePath or content must be provided."),
     permissions: z.string().optional().describe("chmod permissions to set, e.g. '755' for executable scripts"),
-    suppressHistory: z.boolean().optional().describe("Prepend space to avoid shell history"),
+    suppressHistory: z.boolean().optional().describe("Prepend space to avoid shell history. Default: true."),
   },
   async (args) => {
     try {
@@ -1077,7 +1077,7 @@ server.tool(
     paneId: z.string().describe("ID of the tmux pane"),
     sourcePath: z.string().describe("Path of the file in the pane"),
     destinationPath: z.string().optional().describe("Local path to write the file to. If omitted, content is returned as text."),
-    suppressHistory: z.boolean().optional().describe("Prepend space to avoid shell history"),
+    suppressHistory: z.boolean().optional().describe("Prepend space to avoid shell history. Default: true."),
   },
   async (args) => {
     try {

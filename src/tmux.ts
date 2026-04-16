@@ -332,12 +332,15 @@ export async function executeCommand(
   const rawMode = opts.rawMode;
   const effectiveNoEnter = opts.noEnter;
 
+  // Guard against LLM agents wrapping the command in unnecessary quotes.
+  const sanitizedCommand = (rawMode || effectiveNoEnter) ? command : stripOuterQuotes(command);
+
   // Generate unique ID for this command execution
   const commandId = uuidv4();
   const commandExec: CommandExecution = {
     id: commandId,
     paneId,
-    command,
+    command: sanitizedCommand,
     status: 'pending',
     startTime: new Date(),
     rawMode: rawMode || effectiveNoEnter
@@ -350,7 +353,7 @@ export async function executeCommand(
   if (rawMode || effectiveNoEnter) {
     fullCommand = command;
   } else {
-    fullCommand = buildWrappedCommand(commandExec, command, opts.timeoutSeconds, opts.suppressHistory);
+    fullCommand = buildWrappedCommand(commandExec, sanitizedCommand, opts.timeoutSeconds, opts.suppressHistory);
   }
 
   // Send the command to the tmux pane
@@ -460,6 +463,44 @@ function shellSingleQuote(s: string): string {
 }
 
 /**
+ * Strip unnecessary outer quotes from a command string.
+ *
+ * LLM agents sometimes wrap the command in matching quotes, e.g.
+ *   "ls -la"   or   'ls -la'
+ * These are not needed (the command is already a raw string at this point) and
+ * cause shell parse errors when we embed the command in our wrapper.  We only
+ * strip when the **entire** string is wrapped in a single pair of matching
+ * quotes and the interior is balanced (i.e. the quote char does not appear
+ * unescaped inside).
+ */
+function stripOuterQuotes(cmd: string): string {
+  // Need at least 3 chars for a quoted non-empty command: quote + char + quote
+  if (cmd.length < 3) return cmd;
+  const first = cmd[0];
+  const last = cmd[cmd.length - 1];
+
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    const inner = cmd.slice(1, -1);
+    // Only strip if the quote character does not appear unescaped inside.
+    // For double quotes: no unescaped " (allow \")
+    // For single quotes: no ' at all (single quotes cannot be escaped inside single quotes)
+    if (first === '"') {
+      // Check for unescaped double quotes inside
+      if (!/(?<!\\)"/.test(inner)) {
+        return inner;
+      }
+    } else {
+      // Single quotes: no escaping possible, so no ' allowed inside
+      if (!inner.includes("'")) {
+        return inner;
+      }
+    }
+  }
+
+  return cmd;
+}
+
+/**
  * Build the full line sent via `send-keys` for a tracked command. Wraps the
  * user's command in `sh -c '...'` so parsing is POSIX regardless of the pane's
  * interactive shell (zsh/fish/bash/…). When a timeout is requested, detects
@@ -467,9 +508,10 @@ function shellSingleQuote(s: string): string {
  * cache), wrapping the command when a binary is found, and running unguarded
  * when not (the outer poll loop handles the Ctrl-C fallback).
  *
- * `suppressHistory` prepends a single space, which keeps the line out of
- * history for shells configured with HISTCONTROL=ignorespace / HIST_IGNORE_SPACE
- * (bash/zsh); a no-op elsewhere.
+ * `suppressHistory` (default **true**) prepends a single space, which keeps
+ * the line out of history for shells configured with HISTCONTROL=ignorespace /
+ * HIST_IGNORE_SPACE (bash/zsh); a no-op elsewhere. Set to `false` explicitly
+ * to allow the wrapped command to appear in shell history.
  */
 function buildWrappedCommand(
   command: CommandExecution,
@@ -509,7 +551,10 @@ function buildWrappedCommand(
   }
 
   const line = `sh -c ${shellSingleQuote(body)}`;
-  return suppressHistory ? ` ${line}` : line;
+  // Default to prepending a space (suppressHistory) — our wrapped commands are
+  // bookkeeping noise that should not pollute the user's shell history.
+  const suppress = suppressHistory !== false;  // default true; only skip when explicitly false
+  return suppress ? ` ${line}` : line;
 }
 
 export type BlockingStatus =
