@@ -125,19 +125,33 @@ Tools that fall outside the active scope are **removed from the tool list** — 
 
 ### Running Label
 
-Tracked commands (`execute-command-async`, `execute-command-kill-after`, `execute-command-wait-for-exit`) display a human-readable label in the pane output before the command executes:
+Tracked commands (`execute-command-async`, `execute-command-kill-after`, `execute-command-wait-for-exit`) display a human-readable label in the pane output before the command executes, surrounded by separator lines for visibility:
 
 ```
+######################
 # Running: npm test
+######################
 ```
 
-When a timeout is configured (`execute-command-kill-after`), the label includes it:
+When a timeout is configured (`execute-command-kill-after`), the label shows the timeout duration and which mechanism will be used:
 
 ```
-# Running: npm test (timeout: 30s)
+######################
+# Running: npm test
+# (timeout: 30s via /usr/bin/timeout)
+######################
 ```
 
-This makes it easy to see at a glance what command is running in each pane and whether it has a timeout.
+If no `timeout`/`gtimeout` command is available on the target host, the fallback is shown:
+
+```
+######################
+# Running: npm test
+# (timeout: 30s via Ctrl-C)
+######################
+```
+
+This makes it easy to see at a glance what command is running in each pane, the timeout duration, and how it will be enforced.
 
 ### Wait-for-pane-content Tools
 

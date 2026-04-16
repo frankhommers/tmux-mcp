@@ -482,22 +482,28 @@ function buildWrappedCommand(
 
   // Human-readable label so the user can see what command is running.
   // Single-quoted to prevent shell expansion; inner single quotes are escaped.
-  const timeoutLabel = timeoutSeconds !== undefined ? ` (timeout: ${timeoutSeconds}s)` : '';
-  const runningLabel = `echo ${shellSingleQuote(`# Running: ${userCmd}${timeoutLabel}`)}; `;
+  const labelText = `# Running: ${userCmd}`;
+  const separator = '#'.repeat(Math.min(labelText.length, 80));
 
   let body: string;
   if (timeoutSeconds === undefined) {
+    const runningLabel = `echo ${shellSingleQuote(separator)}; echo ${shellSingleQuote(labelText)}; echo ${shellSingleQuote(separator)}; `;
     body = `${runningLabel}echo "${startMarker}"; ${userCmd}; echo "${endMarker}"`;
   } else {
     // Assign userCmd to a shell variable using a single-quoted literal so the
     // outer sh doesn't expand or re-parse it. `'` inside userCmd is escaped as
     // `'\''`. The inner `sh -c "$U"` then receives the exact user command.
     const userCmdSQ = "'" + userCmd.replace(/'/g, "'\\''") + "'";
+    // Detect timeout command first, then print the label including which
+    // timeout mechanism will be used, so the user sees it before the command runs.
     body =
-      `${runningLabel}` +
+      `T=$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null); ` +
+      `echo ${shellSingleQuote(separator)}; ` +
+      `echo ${shellSingleQuote(labelText)}; ` +
+      `if [ -n "$T" ]; then echo "# (timeout: ${timeoutSeconds}s via $T)"; else echo "# (timeout: ${timeoutSeconds}s via Ctrl-C)"; fi; ` +
+      `echo ${shellSingleQuote(separator)}; ` +
       `U=${userCmdSQ}; ` +
       `echo "${startMarker}"; ` +
-      `T=$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null); ` +
       `\${T:+$T ${timeoutSeconds}s} sh -c "$U"; ` +
       `echo "${endMarker}"`;
   }
@@ -535,6 +541,7 @@ export interface WaitForPaneContentOptions {
   timeoutSeconds: number;
   pollIntervalMs?: number;
   lines?: number;
+  ignoreExisting?: boolean;
 }
 
 /**
@@ -994,12 +1001,44 @@ async function pollPaneContent(
     }
   }
 
+  // When ignoreExisting is true (the default), capture a baseline snapshot
+  // and only match against lines that were NOT present in this snapshot.
+  let baselineLines: Set<string> | null = null;
+  if (options.ignoreExisting !== false) {
+    const baselineContent = await capturePaneContent(paneId, options.lines ?? 200);
+    baselineLines = new Set(baselineContent.split('\n'));
+  }
+
   while (Date.now() < deadline) {
     const content = await capturePaneContent(paneId, options.lines ?? 200);
-    const lines = content.split('\n');
+    const allLines = content.split('\n');
+
+    // When we have a baseline, only consider lines not in the baseline.
+    // We track which baseline lines have been "consumed" so that if the
+    // same text appears again (new occurrence), it IS considered new.
+    let linesToCheck: string[];
+    if (baselineLines !== null) {
+      const remainingBaseline = new Map<string, number>();
+      for (const bl of baselineLines) {
+        remainingBaseline.set(bl, (remainingBaseline.get(bl) ?? 0) + 1);
+      }
+      linesToCheck = [];
+      for (const line of allLines) {
+        const count = remainingBaseline.get(line);
+        if (count !== undefined && count > 0) {
+          // This line existed in the baseline; consume one occurrence
+          remainingBaseline.set(line, count - 1);
+        } else {
+          // This line is new (not in baseline, or extra occurrence)
+          linesToCheck.push(line);
+        }
+      }
+    } else {
+      linesToCheck = allLines;
+    }
 
     let foundLine: string | undefined;
-    for (const line of lines) {
+    for (const line of linesToCheck) {
       if (matcher ? matcher.test(line) : line.includes(pattern)) {
         foundLine = line;
         break;

@@ -1108,16 +1108,17 @@ server.tool(
 // ── wait-for-pane-content ──────────────────────────────────────────────
 server.tool(
   "wait-for-pane-content",
-  "Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Useful for waiting until a command produces specific output, a server becomes ready, or a prompt returns.",
+  "Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Useful for waiting until a command produces specific output, a server becomes ready, or a prompt returns. By default (ignoreExisting=true), takes a baseline snapshot when called and only matches against NEW content that appears after the call, preventing false positives from pre-existing pane content. Set ignoreExisting=false to search all visible content including pre-existing text.",
   {
     paneId: z.string().describe("ID of the tmux pane"),
     text: z.string().describe("Text or regex pattern to wait for"),
     regex: z.boolean().optional().describe("Interpret 'text' as a regular expression. Default: false"),
+    ignoreExisting: z.boolean().optional().describe("When true (default), takes a baseline snapshot of the current pane content and only matches against NEW lines that appear after this tool is called. Prevents false positives from pre-existing content. Set to false to search all visible content. Default: true"),
     timeoutSeconds: z.number().positive().describe("Maximum seconds to wait before returning a timeout error"),
     pollIntervalMs: z.number().positive().optional().describe("How often to check pane content in milliseconds. Default: 500"),
     lines: z.string().optional().describe("Number of lines to capture from the pane. Default: visible pane content")
   },
-  async ({ paneId, text, regex, timeoutSeconds, pollIntervalMs, lines }) => {
+  async ({ paneId, text, regex, ignoreExisting, timeoutSeconds, pollIntervalMs, lines }) => {
     try {
       if (isExcludedPane(paneId)) {
         return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
@@ -1133,6 +1134,7 @@ server.tool(
       const linesCount = lines ? parseInt(lines, 10) : undefined;
       const result = await tmux.waitForPaneContent(paneId, text, {
         regex,
+        ignoreExisting,
         timeoutSeconds,
         pollIntervalMs,
         lines: linesCount,
@@ -1152,16 +1154,17 @@ server.tool(
 // ── wait-for-pane-content-gone ─────────────────────────────────────────
 server.tool(
   "wait-for-pane-content-gone",
-  "Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals. Checks only the visible content controlled by the 'lines' parameter, not full scrollback history. Text that has scrolled out of the capture window is considered 'gone'.",
+  "Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals. Checks only the visible content controlled by the 'lines' parameter, not full scrollback history. Text that has scrolled out of the capture window is considered 'gone'. By default (ignoreExisting=true), takes a baseline snapshot when called and only checks NEW content that appears after the call. The pattern is considered 'gone' if it does not appear in any new lines. Set ignoreExisting=false to check all visible content including pre-existing text.",
   {
     paneId: z.string().describe("ID of the tmux pane"),
     text: z.string().describe("Text or regex pattern to wait for to disappear"),
     regex: z.boolean().optional().describe("Interpret 'text' as a regular expression. Default: false"),
+    ignoreExisting: z.boolean().optional().describe("When true (default), takes a baseline snapshot of the current pane content and only checks NEW lines that appear after this tool is called. Set to false to check all visible content. Default: true"),
     timeoutSeconds: z.number().positive().describe("Maximum seconds to wait before returning a timeout error"),
     pollIntervalMs: z.number().positive().optional().describe("How often to check pane content in milliseconds. Default: 500"),
     lines: z.string().optional().describe("Number of lines to capture from the pane. Default: visible pane content")
   },
-  async ({ paneId, text, regex, timeoutSeconds, pollIntervalMs, lines }) => {
+  async ({ paneId, text, regex, ignoreExisting, timeoutSeconds, pollIntervalMs, lines }) => {
     try {
       if (isExcludedPane(paneId)) {
         return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
@@ -1177,6 +1180,7 @@ server.tool(
       const linesCount = lines ? parseInt(lines, 10) : undefined;
       const result = await tmux.waitForPaneContentGone(paneId, text, {
         regex,
+        ignoreExisting,
         timeoutSeconds,
         pollIntervalMs,
         lines: linesCount,
