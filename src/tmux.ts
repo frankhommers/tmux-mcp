@@ -317,6 +317,10 @@ export interface ExecuteCommandOptions {
   noEnter?: boolean;
   timeoutSeconds?: number;
   suppressHistory?: boolean;
+  // When set, used in the "# Running: ..." banner instead of the actual
+  // command. Useful for tools that send huge inline payloads (file-upload,
+  // file-download) and don't want the payload duplicated in the banner.
+  displayLabel?: string;
 }
 
 // Execute a command in a tmux pane and track its execution
@@ -353,7 +357,7 @@ export async function executeCommand(
   if (rawMode || effectiveNoEnter) {
     fullCommand = command;
   } else {
-    fullCommand = buildWrappedCommand(commandExec, sanitizedCommand, opts.timeoutSeconds, opts.suppressHistory);
+    fullCommand = buildWrappedCommand(commandExec, sanitizedCommand, opts.timeoutSeconds, opts.suppressHistory, opts.displayLabel);
   }
 
   // Send the command to the tmux pane
@@ -518,13 +522,16 @@ function buildWrappedCommand(
   userCmd: string,
   timeoutSeconds?: number,
   suppressHistory?: boolean,
+  displayLabel?: string,
 ): string {
   const startMarker = getStartMarkerText(command);
   const endMarker = getEndMarkerText(command);
 
   // Human-readable label so the user can see what command is running.
-  // Single-quoted to prevent shell expansion; inner single quotes are escaped.
-  const labelText = `# Running: ${userCmd}`;
+  // When displayLabel is provided, use it instead of the raw command — useful
+  // for tools sending large inline payloads (file-upload, file-download) that
+  // would otherwise dump the entire payload into the banner.
+  const labelText = `# Running: ${displayLabel ?? userCmd}`;
   const separator = '#'.repeat(Math.min(labelText.length, 80));
 
   let body: string;
@@ -579,6 +586,7 @@ export interface RunBlockingOptions {
   interruptIntervalMs?: number;   // default 200
   postInterruptWaitMs?: number;   // default 500
   suppressHistory?: boolean;      // prepend space to dodge history (bash/zsh w/ ignorespace)
+  displayLabel?: string;          // override the "# Running: ..." banner text
 }
 
 export interface WaitForPaneContentOptions {
@@ -618,6 +626,7 @@ export async function runBlocking(
   const commandId = await executeCommand(paneId, command, {
     timeoutSeconds: opts.timeoutSeconds,
     suppressHistory: opts.suppressHistory,
+    displayLabel: opts.displayLabel,
   });
 
   // Polling deadline. When a timeout was requested, give a generous +10s
@@ -935,6 +944,7 @@ export async function uploadFile(opts: FileUploadOptions): Promise<FileTransferR
   const result = await runBlocking(opts.paneId, cmd, {
     timeoutSeconds: 30,
     suppressHistory: opts.suppressHistory,
+    displayLabel: `file-upload → ${opts.destinationPath} (${originalSize}B raw, ${base64.length}B base64)`,
   });
 
   if (result.status === 'completed') {
@@ -973,6 +983,7 @@ export async function downloadFile(opts: FileDownloadOptions): Promise<FileDownl
   const result = await runBlocking(opts.paneId, cmd, {
     timeoutSeconds: 30,
     suppressHistory: opts.suppressHistory,
+    displayLabel: `file-download ← ${opts.sourcePath}`,
   });
 
   if (result.status !== 'completed' || result.exitCode !== 0) {
