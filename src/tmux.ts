@@ -524,8 +524,19 @@ function buildWrappedCommand(
   suppressHistory?: boolean,
   displayLabel?: string,
 ): string {
-  const startMarker = getStartMarkerText(command);
-  const endMarker = getEndMarkerText(command);
+  const idShort = command.id.slice(0, 8);
+
+  // Marker emit lines use string-concatenation in the source ("TMUX""_MCP_…")
+  // so the contiguous marker only appears in the *output*, never in the
+  // wrapper source itself. This matters because:
+  //   1. tmux echoes the typed command line back through the pty before
+  //      running it, and
+  //   2. `sh` reprints the offending source on a parse error.
+  // Without this trick the parser's lastIndexOf would latch onto those echoes
+  // and either match a bogus end-marker (no exit code) or — worse — mark the
+  // command done when it never actually ran.
+  const startEcho = `echo "TMUX""_MCP_START_${idShort}"`;
+  const endEcho = `echo "TMUX""_MCP_DONE_${idShort}_$?"`;
 
   // Human-readable label so the user can see what command is running.
   // When displayLabel is provided, use it instead of the raw command — useful
@@ -534,15 +545,26 @@ function buildWrappedCommand(
   const labelText = `# Running: ${displayLabel ?? userCmd}`;
   const separator = '#'.repeat(Math.min(labelText.length, 80));
 
+  // Always assign userCmd to a shell variable using a single-quoted literal
+  // and run it via an inner `sh -c "$U"`. This isolates user-side parse errors
+  // from the wrapper: if `$U` fails to parse, the inner sh reports the error
+  // and exits non-zero, but the outer sh keeps running and still emits the end
+  // marker. Inline embedding would take the whole wrapper down at parse time,
+  // leaving the poller blocked forever.
+  // `'` inside userCmd is escaped as `'\''`.
+  const userCmdSQ = "'" + userCmd.replace(/'/g, "'\\''") + "'";
+
   let body: string;
   if (timeoutSeconds === undefined) {
-    const runningLabel = `echo ${shellSingleQuote(separator)}; echo ${shellSingleQuote(labelText)}; echo ${shellSingleQuote(separator)}; `;
-    body = `${runningLabel}echo "${startMarker}"; ${userCmd}; echo "${endMarker}"`;
+    body =
+      `echo ${shellSingleQuote(separator)}; ` +
+      `echo ${shellSingleQuote(labelText)}; ` +
+      `echo ${shellSingleQuote(separator)}; ` +
+      `U=${userCmdSQ}; ` +
+      `${startEcho}; ` +
+      `sh -c "$U"; ` +
+      `${endEcho}`;
   } else {
-    // Assign userCmd to a shell variable using a single-quoted literal so the
-    // outer sh doesn't expand or re-parse it. `'` inside userCmd is escaped as
-    // `'\''`. The inner `sh -c "$U"` then receives the exact user command.
-    const userCmdSQ = "'" + userCmd.replace(/'/g, "'\\''") + "'";
     // Detect timeout command first, then print the label including which
     // timeout mechanism will be used, so the user sees it before the command runs.
     body =
@@ -552,9 +574,9 @@ function buildWrappedCommand(
       `if [ -n "$T" ]; then echo "# (timeout: ${timeoutSeconds}s via $T)"; else echo "# (timeout: ${timeoutSeconds}s via Ctrl-C)"; fi; ` +
       `echo ${shellSingleQuote(separator)}; ` +
       `U=${userCmdSQ}; ` +
-      `echo "${startMarker}"; ` +
+      `${startEcho}; ` +
       `\${T:+$T ${timeoutSeconds}s} sh -c "$U"; ` +
-      `echo "${endMarker}"`;
+      `${endEcho}`;
   }
 
   const line = `sh -c ${shellSingleQuote(body)}`;
