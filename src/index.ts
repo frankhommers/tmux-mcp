@@ -10,6 +10,62 @@ import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getS
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
 
+// Client request timeout (seconds). The MCP client/transport between this
+// server and the agent typically enforces a request timeout. We expose it as
+// a hard cap so agents cannot request blocking waits that will be aborted by
+// the client. 0 disables the cap. Resolved at module load (before tool
+// registration) so that tool descriptions can embed the configured value.
+const CLIENT_TIMEOUT_DEFAULT = 60;
+const clientTimeoutSeconds: number = (() => {
+  // Lightweight CLI peek: parseArgs is run again in main() for full validation.
+  const argv = process.argv.slice(2);
+  let raw: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--client-timeout' && i + 1 < argv.length) { raw = argv[i + 1]; break; }
+    if (a.startsWith('--client-timeout=')) { raw = a.slice('--client-timeout='.length); break; }
+  }
+  if (raw === undefined) raw = process.env.TMUX_MCP_CLIENT_TIMEOUT;
+  if (raw === undefined) return CLIENT_TIMEOUT_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return CLIENT_TIMEOUT_DEFAULT;
+  return Math.floor(n);
+})();
+const clientTimeoutIsDefault = clientTimeoutSeconds === CLIENT_TIMEOUT_DEFAULT;
+const clientTimeoutDisabled = clientTimeoutSeconds <= 0;
+
+function getMaxBlockingSeconds(): number {
+  return clientTimeoutDisabled ? Infinity : clientTimeoutSeconds - 1;
+}
+
+function checkBlockingTimeout(seconds: number): { ok: true } | { ok: false; message: string } {
+  if (clientTimeoutDisabled) return { ok: true };
+  const max = getMaxBlockingSeconds();
+  if (seconds > max) {
+    return {
+      ok: false,
+      message: `Requested ${seconds}s exceeds the server's blocking-call cap (max allowed: ${max}s, set to stay under the MCP client's ${clientTimeoutSeconds}s request timeout). The client would abort the request before this tool returns. For longer operations, use 'execute-command-async' and poll with 'get-command-result'.`,
+    };
+  }
+  return { ok: true };
+}
+
+// Phrase describing the client timeout for embedding in tool descriptions.
+function clientTimeoutPhrase(): string {
+  if (clientTimeoutDisabled) {
+    return "the MCP client/transport may enforce its own request timeout";
+  }
+  if (clientTimeoutIsDefault) {
+    return `the MCP client/transport typically enforces a request timeout (often ${clientTimeoutSeconds}s)`;
+  }
+  return `the MCP client enforces a ${clientTimeoutSeconds}s request timeout`;
+}
+
+function maxSecondsPhrase(): string {
+  if (clientTimeoutDisabled) return "no server-side cap";
+  return `max allowed: ${getMaxBlockingSeconds()}s`;
+}
+
 // Create MCP server
 const server = new McpServer({
   name: "tmux-mcp",
@@ -662,7 +718,7 @@ function formatBlockingResult(res: tmux.BlockingResult): string {
 // Execute command, block with timeout, kill on timeout - Tool
 server.tool(
   "execute-command-kill-after",
-  "Execute a command and block until it completes OR the timeout elapses. The command runs inside `sh -c` (POSIX, shell-agnostic) and inline-probes for GNU `timeout`/`gtimeout` on the target host; when present, the kernel handles the kill (exit code 124 or 137). When absent, falls back to Ctrl-C sequences and verifies the kill via pane_current_command. Returns one of: 'completed', 'error', 'timed_out' (if interruptOnTimeout=false), 'timed_out_interrupted' (kill confirmed), or 'timed_out_still_running' (command resisted the interrupt). Does not support rawMode/noEnter.",
+  `Execute a command and block until it completes OR the timeout elapses. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected so the client cannot abort mid-flight. For long-running work, prefer \`execute-command-async\` + \`get-command-result\`. The command runs inside \`sh -c\` (POSIX, shell-agnostic) and inline-probes for GNU \`timeout\`/\`gtimeout\` on the target host; when present, the kernel handles the kill (exit code 124 or 137). When absent, falls back to Ctrl-C sequences and verifies the kill via pane_current_command. Returns one of: 'completed', 'error', 'timed_out' (if interruptOnTimeout=false), 'timed_out_interrupted' (kill confirmed), or 'timed_out_still_running' (command resisted the interrupt). Does not support rawMode/noEnter.`,
   {
     paneId: z.string().describe("ID of the tmux pane"),
     command: z.string().describe("Command to execute"),
@@ -678,6 +734,10 @@ server.tool(
     try {
       if (isExcludedPane(args.paneId)) {
         return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
+      }
+      const cap = checkBlockingTimeout(args.timeoutSeconds);
+      if (!cap.ok) {
+        return { content: [{ type: "text", text: cap.message }], isError: true };
       }
       await assertInScope(args.paneId, 'pane');
       const result = await tmux.runBlocking(args.paneId, args.command, {
@@ -699,7 +759,7 @@ server.tool(
 // Execute command, block until completion (no timeout) - Tool
 server.tool(
   "execute-command-wait-for-exit",
-  "Execute a command and block until it completes. No timeout — will wait indefinitely. Returns 'completed' or 'error' with exit code and output. Does not support rawMode/noEnter.",
+  `Execute a command and block until it completes. The server itself imposes no timeout, BUT ${clientTimeoutPhrase()}. If the command runs longer than that the client will return a request-timeout error even though the command keeps running in the pane. For anything that may exceed that limit, do NOT use this tool — use \`execute-command-async\` and poll with \`get-command-result\` instead, or use \`execute-command-kill-after\` with a bounded \`timeoutSeconds\`. Returns 'completed' or 'error' with exit code and output. Does not support rawMode/noEnter.`,
   {
     paneId: z.string().describe("ID of the tmux pane"),
     command: z.string().describe("Command to execute"),
@@ -1108,7 +1168,7 @@ server.tool(
 // ── wait-for-pane-content ──────────────────────────────────────────────
 server.tool(
   "wait-for-pane-content",
-  "Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Useful for waiting until a command produces specific output, a server becomes ready, or a prompt returns. By default (ignoreExisting=true), takes a baseline snapshot when called and only matches against NEW content that appears after the call, preventing false positives from pre-existing pane content. Set ignoreExisting=false to search all visible content including pre-existing text.",
+  `Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Useful for waiting until a command produces specific output, a server becomes ready, or a prompt returns. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer waits, use \`execute-command-async\` + \`get-command-result\`, or chunk the wait into smaller calls. By default (ignoreExisting=true), takes a baseline snapshot when called and only matches against NEW content that appears after the call, preventing false positives from pre-existing pane content. Set ignoreExisting=false to search all visible content including pre-existing text.`,
   {
     paneId: z.string().describe("ID of the tmux pane"),
     text: z.string().describe("Text or regex pattern to wait for"),
@@ -1122,6 +1182,10 @@ server.tool(
     try {
       if (isExcludedPane(paneId)) {
         return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
+      }
+      const cap = checkBlockingTimeout(timeoutSeconds);
+      if (!cap.ok) {
+        return { content: [{ type: "text", text: cap.message }], isError: true };
       }
       await assertInScope(paneId, 'pane');
 
@@ -1154,7 +1218,7 @@ server.tool(
 // ── wait-for-pane-content-gone ─────────────────────────────────────────
 server.tool(
   "wait-for-pane-content-gone",
-  "Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals. Checks only the visible content controlled by the 'lines' parameter, not full scrollback history. Text that has scrolled out of the capture window is considered 'gone'. By default (ignoreExisting=true), takes a baseline snapshot when called and only checks NEW content that appears after the call. The pattern is considered 'gone' if it does not appear in any new lines. Set ignoreExisting=false to check all visible content including pre-existing text.",
+  `Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals. Checks only the visible content controlled by the 'lines' parameter, not full scrollback history. Text that has scrolled out of the capture window is considered 'gone'. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer waits, use \`execute-command-async\` + \`get-command-result\`, or chunk the wait into smaller calls. By default (ignoreExisting=true), takes a baseline snapshot when called and only checks NEW content that appears after the call. The pattern is considered 'gone' if it does not appear in any new lines. Set ignoreExisting=false to check all visible content including pre-existing text.`,
   {
     paneId: z.string().describe("ID of the tmux pane"),
     text: z.string().describe("Text or regex pattern to wait for to disappear"),
@@ -1168,6 +1232,10 @@ server.tool(
     try {
       if (isExcludedPane(paneId)) {
         return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
+      }
+      const cap = checkBlockingTimeout(timeoutSeconds);
+      if (!cap.ok) {
+        return { content: [{ type: "text", text: cap.message }], isError: true };
       }
       await assertInScope(paneId, 'pane');
 
@@ -1200,7 +1268,7 @@ server.tool(
 // ── sleep ──────────────────────────────────────────────────────────────
 server.tool(
   "sleep",
-  "Wait for a specified number of seconds. No pane interaction. Useful as a delay between operations.",
+  `Wait for a specified number of seconds. No pane interaction. Useful as a delay between operations. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`seconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer delays, use \`execute-command-async\` to fire a \`sleep N\` and poll with \`get-command-result\`.`,
   {
     seconds: z.number().describe("Number of seconds to wait. Must be greater than 0")
   },
@@ -1208,6 +1276,10 @@ server.tool(
     try {
       if (seconds <= 0) {
         return { content: [{ type: "text", text: "Error: seconds must be greater than 0" }], isError: true };
+      }
+      const cap = checkBlockingTimeout(seconds);
+      if (!cap.ok) {
+        return { content: [{ type: "text", text: cap.message }], isError: true };
       }
       await new Promise(resolve => setTimeout(resolve, seconds * 1000));
       return { content: [{ type: "text", text: `Slept for ${seconds}s` }] };
@@ -1245,7 +1317,8 @@ async function main() {
       options: {
         'scope': { type: 'string' },
         'include-current-pane': { type: 'boolean', default: false },
-        'default-split-direction': { type: 'string' }
+        'default-split-direction': { type: 'string' },
+        'client-timeout': { type: 'string' }
       }
     });
 
@@ -1267,6 +1340,17 @@ async function main() {
         process.exit(1);
       }
       defaultSplitDirection = splitDir;
+    }
+
+    // Validate client-timeout strictly (the value itself was already resolved
+    // at module load so tool descriptions could embed it).
+    const ctRaw = (values['client-timeout'] as string | undefined) ?? process.env.TMUX_MCP_CLIENT_TIMEOUT;
+    if (ctRaw !== undefined) {
+      const n = Number(ctRaw);
+      if (!Number.isFinite(n) || n < 0) {
+        console.error(`Invalid --client-timeout: '${ctRaw}'. Must be a non-negative number (0 disables the cap).`);
+        process.exit(1);
+      }
     }
 
     // Start the MCP server
