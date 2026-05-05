@@ -22,8 +22,8 @@ const clientTimeoutSeconds: number = (() => {
   let raw: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--client-timeout' && i + 1 < argv.length) { raw = argv[i + 1]; break; }
-    if (a.startsWith('--client-timeout=')) { raw = a.slice('--client-timeout='.length); break; }
+    if (a === '--client-timeout-seconds' && i + 1 < argv.length) { raw = argv[i + 1]; break; }
+    if (a.startsWith('--client-timeout-seconds=')) { raw = a.slice('--client-timeout-seconds='.length); break; }
   }
   if (raw === undefined) raw = process.env.TMUX_MCP_CLIENT_TIMEOUT;
   if (raw === undefined) return CLIENT_TIMEOUT_DEFAULT;
@@ -1318,7 +1318,7 @@ async function main() {
         'scope': { type: 'string' },
         'include-current-pane': { type: 'boolean', default: false },
         'default-split-direction': { type: 'string' },
-        'client-timeout': { type: 'string' }
+        'client-timeout-seconds': { type: 'string' }
       }
     });
 
@@ -1344,11 +1344,11 @@ async function main() {
 
     // Validate client-timeout strictly (the value itself was already resolved
     // at module load so tool descriptions could embed it).
-    const ctRaw = (values['client-timeout'] as string | undefined) ?? process.env.TMUX_MCP_CLIENT_TIMEOUT;
+    const ctRaw = (values['client-timeout-seconds'] as string | undefined) ?? process.env.TMUX_MCP_CLIENT_TIMEOUT;
     if (ctRaw !== undefined) {
       const n = Number(ctRaw);
       if (!Number.isFinite(n) || n < 0) {
-        console.error(`Invalid --client-timeout: '${ctRaw}'. Must be a non-negative number (0 disables the cap).`);
+        console.error(`Invalid --client-timeout-seconds: '${ctRaw}'. Must be a non-negative number (0 disables the cap).`);
         process.exit(1);
       }
     }
