@@ -25,7 +25,7 @@ const clientTimeoutSeconds: number = (() => {
     if (a === '--client-timeout-seconds' && i + 1 < argv.length) { raw = argv[i + 1]; break; }
     if (a.startsWith('--client-timeout-seconds=')) { raw = a.slice('--client-timeout-seconds='.length); break; }
   }
-  if (raw === undefined) raw = process.env.TMUX_MCP_CLIENT_TIMEOUT;
+  if (raw === undefined) raw = process.env.TMUX_MCP_CLIENT_TIMEOUT_SECONDS;
   if (raw === undefined) return CLIENT_TIMEOUT_DEFAULT;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return CLIENT_TIMEOUT_DEFAULT;
@@ -1344,7 +1344,7 @@ async function main() {
 
     // Validate client-timeout strictly (the value itself was already resolved
     // at module load so tool descriptions could embed it).
-    const ctRaw = (values['client-timeout-seconds'] as string | undefined) ?? process.env.TMUX_MCP_CLIENT_TIMEOUT;
+    const ctRaw = (values['client-timeout-seconds'] as string | undefined) ?? process.env.TMUX_MCP_CLIENT_TIMEOUT_SECONDS;
     if (ctRaw !== undefined) {
       const n = Number(ctRaw);
       if (!Number.isFinite(n) || n < 0) {
