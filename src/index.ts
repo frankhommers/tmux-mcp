@@ -1286,16 +1286,26 @@ server.tool(
   {
     seconds: z.number().describe("Number of seconds to wait. Must be greater than 0")
   },
-  async ({ seconds }) => {
+  async ({ seconds }, extra) => {
     try {
       if (seconds <= 0) {
         return { content: [{ type: "text", text: "Error: seconds must be greater than 0" }], isError: true };
       }
-      const cap = checkBlockingTimeout(seconds);
-      if (!cap.ok) {
-        return { content: [{ type: "text", text: cap.message }], isError: true };
+      const progress = createProgressEmitter(extra, "sleep");
+      if (!progress.hasToken()) {
+        const cap = checkBlockingTimeout(seconds);
+        if (!cap.ok) {
+          return { content: [{ type: "text", text: cap.message }], isError: true };
+        }
       }
-      await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+      const deadline = Date.now() + seconds * 1000;
+      while (Date.now() < deadline) {
+        const remaining = deadline - Date.now();
+        await new Promise(r => setTimeout(r, Math.min(1000, remaining)));
+        // Successful event-loop tick — for sleep this is the unresponsiveness
+        // signal we have. If the loop wedges, we never tick.
+        await progress.tickIfDue();
+      }
       return { content: [{ type: "text", text: `Slept for ${seconds}s` }] };
     } catch (error) {
       return { content: [{ type: "text", text: `Error during sleep: ${error}` }], isError: true };
