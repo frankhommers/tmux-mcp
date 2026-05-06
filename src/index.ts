@@ -771,13 +771,14 @@ server.tool(
     pollIntervalMs: z.number().positive().optional().describe("How often to check for completion. Default: 500"),
     suppressHistory: z.boolean().optional().describe("Prepend a single space so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding the line to history. Default: true."),
   },
-  async ({ paneId, command, pollIntervalMs, suppressHistory }) => {
+  async ({ paneId, command, pollIntervalMs, suppressHistory }, extra) => {
     try {
       if (isExcludedPane(paneId)) {
         return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
       await assertInScope(paneId, 'pane');
-      const result = await tmux.runBlocking(paneId, command, { pollIntervalMs, suppressHistory });
+      const progress = createProgressEmitter(extra, "execute-command-wait-for-exit");
+      const result = await tmux.runBlocking(paneId, command, { pollIntervalMs, suppressHistory, progress });
       return { content: [{ type: "text", text: formatBlockingResult(result) }] };
     } catch (error) {
       return { content: [{ type: "text", text: `Error executing command: ${error}` }], isError: true };
