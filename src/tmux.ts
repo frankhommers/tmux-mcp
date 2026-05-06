@@ -3,6 +3,7 @@ import { promisify } from "util";
 import { v4 as uuidv4 } from 'uuid';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { readFile, writeFile } from 'node:fs/promises';
+import type { ProgressEmitter } from './progress.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -609,6 +610,7 @@ export interface RunBlockingOptions {
   postInterruptWaitMs?: number;   // default 500
   suppressHistory?: boolean;      // prepend space to dodge history (bash/zsh w/ ignorespace)
   displayLabel?: string;          // override the "# Running: ..." banner text
+  progress?: ProgressEmitter;     // emit progress notifications during the wait
 }
 
 export interface WaitForPaneContentOptions {
@@ -681,6 +683,11 @@ export async function runBlocking(
         output: status.result ?? '',
       };
     }
+
+    // Successful poll (status returned, command still pending) — eligible to
+    // emit a keepalive. If checkCommandStatus had thrown or hung, we'd never
+    // reach this line, which is the desired behavior.
+    await opts.progress?.tickIfDue('command still running');
 
     if (Date.now() >= deadline) break;
 
