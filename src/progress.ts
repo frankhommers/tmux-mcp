@@ -47,9 +47,15 @@ export function createProgressEmitter(
   intervalMs: number = DEFAULT_INTERVAL_MS,
 ): ProgressEmitter {
   const token = extra?._meta?.progressToken;
-  if (token === undefined || token === null) return NOOP;
+  if (token === undefined) return NOOP;
 
+  // `extra` is necessarily defined here: token came from extra._meta.progressToken.
+  const e = extra as ExtraLike;
   const startedAt = Date.now();
+  // Initialized to 0 (not startedAt) so the first successful poll emits an
+  // immediate "I received your request" ping. This gives the client an early
+  // confirmation and more safety margin against its per-request timer; the
+  // ~25s rate limit takes over from the second tick onwards.
   let lastEmittedAt = 0;
   let counter = 0;
   let warned = false;
@@ -66,7 +72,7 @@ export function createProgressEmitter(
         ? `${toolName}: ${elapsedSec}s elapsed, ${context}`
         : `${toolName}: ${elapsedSec}s elapsed`;
       try {
-        await extra!.sendNotification({
+        await e.sendNotification({
           method: 'notifications/progress',
           params: { progressToken: token, progress: counter, message },
         });
