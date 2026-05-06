@@ -1238,14 +1238,17 @@ server.tool(
     pollIntervalMs: z.number().positive().optional().describe("How often to check pane content in milliseconds. Default: 500"),
     lines: z.string().optional().describe("Number of lines to capture from the pane. Default: visible pane content")
   },
-  async ({ paneId, text, regex, ignoreExisting, timeoutSeconds, pollIntervalMs, lines }) => {
+  async ({ paneId, text, regex, ignoreExisting, timeoutSeconds, pollIntervalMs, lines }, extra) => {
     try {
       if (isExcludedPane(paneId)) {
         return { content: [{ type: "text", text: `Access denied: pane ${paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
-      const cap = checkBlockingTimeout(timeoutSeconds);
-      if (!cap.ok) {
-        return { content: [{ type: "text", text: cap.message }], isError: true };
+      const progress = createProgressEmitter(extra, "wait-for-pane-content-gone");
+      if (!progress.hasToken()) {
+        const cap = checkBlockingTimeout(timeoutSeconds);
+        if (!cap.ok) {
+          return { content: [{ type: "text", text: cap.message }], isError: true };
+        }
       }
       await assertInScope(paneId, 'pane');
 
@@ -1262,6 +1265,7 @@ server.tool(
         timeoutSeconds,
         pollIntervalMs,
         lines: linesCount,
+        progress,
       });
 
       if (result.gone) {
