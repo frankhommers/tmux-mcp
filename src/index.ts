@@ -6,6 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import * as tmux from "./tmux.js";
 import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId } from "./scope.js";
+import { createProgressEmitter } from './progress.js';
 
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
@@ -730,14 +731,17 @@ server.tool(
     postInterruptWaitMs: z.number().nonnegative().optional().describe("Wait time after last Ctrl-C before capturing final output and checking kill. Default: 500"),
     suppressHistory: z.boolean().optional().describe("Prepend a single space so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding the line to history. Default: true."),
   },
-  async (args) => {
+  async (args, extra) => {
     try {
       if (isExcludedPane(args.paneId)) {
         return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
       }
-      const cap = checkBlockingTimeout(args.timeoutSeconds);
-      if (!cap.ok) {
-        return { content: [{ type: "text", text: cap.message }], isError: true };
+      const progress = createProgressEmitter(extra, "execute-command-kill-after");
+      if (!progress.hasToken()) {
+        const cap = checkBlockingTimeout(args.timeoutSeconds);
+        if (!cap.ok) {
+          return { content: [{ type: "text", text: cap.message }], isError: true };
+        }
       }
       await assertInScope(args.paneId, 'pane');
       const result = await tmux.runBlocking(args.paneId, args.command, {
@@ -748,6 +752,7 @@ server.tool(
         interruptIntervalMs: args.interruptIntervalMs,
         postInterruptWaitMs: args.postInterruptWaitMs,
         suppressHistory: args.suppressHistory,
+        progress,
       });
       return { content: [{ type: "text", text: formatBlockingResult(result) }] };
     } catch (error) {
