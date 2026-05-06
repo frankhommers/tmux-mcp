@@ -123,6 +123,31 @@ Tools that fall outside the active scope are **removed from the tool list** — 
 - `wait-for-pane-content-gone` - Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals
 - `sleep` - Wait for a specified number of seconds. No pane interaction
 
+### Long-running tools and progress notifications
+
+The blocking tools (`execute-command-kill-after`, `execute-command-wait-for-exit`,
+`wait-for-pane-content`, `wait-for-pane-content-gone`, `sleep`) automatically
+adapt to the MCP client's progress-notification capability:
+
+- **Client sends a `progressToken`** (per MCP spec): tmux-mcp emits
+  `notifications/progress` every ~25s during the wait. A spec-compliant client
+  with `resetTimeoutOnProgress: true` resets its per-request timer on each
+  notification, so long waits run without hitting the client's timeout. The
+  server's own 59s cap (configurable via `--client-timeout-seconds` /
+  `TMUX_MCP_CLIENT_TIMEOUT_SECONDS`) is automatically lifted in this case —
+  the requested `timeoutSeconds` (or `seconds`) is honored as-is.
+
+- **Client does not send a token**: the cap is enforced. For longer work, use
+  `execute-command-async` and poll with `get-command-result`.
+
+Notifications are only emitted **after a successful tmux poll**, so a hang in
+this server or its tmux subprocess correctly stops emitting and the client's
+unresponsiveness check still works.
+
+For per-server timeout configuration in opencode (anomalyco/opencode#8706),
+set `mcp.tmux.timeout` in your opencode config to bump the per-server limit
+without needing progress-notification support.
+
 ### Running Label
 
 Tracked commands (`execute-command-async`, `execute-command-kill-after`, `execute-command-wait-for-exit`) display a human-readable label in the pane output before the command executes, surrounded by separator lines for visibility:
