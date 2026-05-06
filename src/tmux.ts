@@ -619,6 +619,7 @@ export interface WaitForPaneContentOptions {
   pollIntervalMs?: number;
   lines?: number;
   ignoreExisting?: boolean;
+  progress?: ProgressEmitter;
 }
 
 /**
@@ -1096,6 +1097,10 @@ async function pollPaneContent(
 
   while (Date.now() < deadline) {
     const content = await capturePaneContent(paneId, options.lines ?? 200);
+    // Successful capture — eligible to emit keepalive. If capturePaneContent
+    // had thrown or hung, we'd never reach this line, which is the desired
+    // behavior.
+    await options.progress?.tickIfDue(`polling pane ${paneId}`);
     const allLines = content.split('\n');
 
     // When we have a baseline, only consider lines not in the baseline.
