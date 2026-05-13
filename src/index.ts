@@ -5,8 +5,9 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as tmux from "./tmux.js";
-import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId } from "./scope.js";
+import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId, ensureScopeResolved } from "./scope.js";
 import { createProgressEmitter } from './progress.js';
+import { ResourceChangeWatcher } from './control-mode.js';
 
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
@@ -1384,6 +1385,39 @@ async function main() {
     // Start the MCP server
     const transport = new StdioServerTransport();
     await server.connect(transport);
+
+    // Wire resource-change notifications.
+    // 1) Async command lifecycle: pending -> completed/error -> updated.
+    tmux.onCommandStatusChange((commandId) => {
+      const uri = `tmux://command/${commandId}/result`;
+      void server.server.sendResourceUpdated({ uri }).catch(() => { /* ignore */ });
+    });
+
+    // 2) Structural changes (sessions/windows/panes create/close/rename/layout)
+    //    via tmux control mode, with polling fallback.
+    //    Eagerly resolve scope so the watcher can pick the scoped session as
+    //    its attach target. Failure is non-fatal (scope errors still surface
+    //    on first tool use as before).
+    try { await ensureScopeResolved(); } catch { /* keep lazy semantics on failure */ }
+
+    const watcher = new ResourceChangeWatcher({
+      onListChanged: () => {
+        try { server.sendResourceListChanged(); } catch { /* ignore */ }
+      },
+      log: (level, msg) => {
+        // Best-effort; the transport may not yet be ready to send logs.
+        const mcpLevel = level === 'warn' ? 'warning' : level;
+        void server.server.sendLoggingMessage({ level: mcpLevel, data: `[resource-watcher] ${msg}` }).catch(() => { /* ignore */ });
+      },
+    });
+    void watcher.start();
+
+    const shutdown = () => {
+      try { watcher.stop(); } catch { /* ignore */ }
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    process.once('exit', shutdown);
   } catch (error) {
     console.error("Failed to start MCP server:", error);
     process.exit(1);

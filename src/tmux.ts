@@ -310,6 +310,22 @@ export async function splitPane(
 // Map to track ongoing command executions
 const activeCommands = new Map<string, CommandExecution>();
 
+// Listeners notified when a tracked command transitions from 'pending' to a
+// terminal state ('completed' or 'error'). Used by the MCP server to emit
+// `notifications/resources/updated` for `tmux://command/{id}/result`.
+type CommandStatusListener = (commandId: string, status: 'completed' | 'error') => void;
+const commandStatusListeners: CommandStatusListener[] = [];
+
+export function onCommandStatusChange(listener: CommandStatusListener): void {
+  commandStatusListeners.push(listener);
+}
+
+function emitCommandStatusChange(commandId: string, status: 'completed' | 'error'): void {
+  for (const l of commandStatusListeners) {
+    try { l(commandId, status); } catch { /* listener errors must not break tracking */ }
+  }
+}
+
 const startMarkerText = 'TMUX_MCP_START';
 const endMarkerPrefix = "TMUX_MCP_DONE_";
 
@@ -422,7 +438,8 @@ export async function checkCommandStatus(commandId: string): Promise<CommandExec
   if (exitCodeMatch) {
     const exitCode = parseInt(exitCodeMatch[1], 10);
 
-    command.status = exitCode === 0 ? 'completed' : 'error';
+    const newStatus: 'completed' | 'error' = exitCode === 0 ? 'completed' : 'error';
+    command.status = newStatus;
     command.exitCode = exitCode;
 
     // Extract output between the start and end markers
@@ -437,6 +454,9 @@ export async function checkCommandStatus(commandId: string): Promise<CommandExec
 
     // Update in map
     activeCommands.set(commandId, command);
+
+    // Notify listeners of the pending -> terminal transition.
+    emitCommandStatusChange(commandId, newStatus);
   }
 
   return command;
