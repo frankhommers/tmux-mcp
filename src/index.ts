@@ -615,6 +615,156 @@ server.tool(
   }
 );
 
+// Smart new pane - Tool
+// Picks the best target pane and direction automatically; falls back to a new
+// window when nothing in the current window has enough room. In scope=window
+// the fallback is disabled (creating windows is blocked by scope) and the tool
+// returns an error instead.
+//
+// Thresholds (incl. 1-cell border): width >= 20 to split horizontally,
+// height >= 6 to split vertically. The pane is chosen by the largest resulting
+// dimension after split, so the new pane is as usable as possible.
+const NEW_PANE_SMART_MIN_WIDTH = 20;
+const NEW_PANE_SMART_MIN_HEIGHT = 6;
+
+server.tool(
+  "new-pane-smart",
+  "Create a new tmux pane in a smart location: picks the pane with the most room in the current window and splits in the direction that leaves the most space. Falls back to creating a new window in the same session when no pane has enough room. Use this when you don't care exactly where the new pane lands and just need a working space. Returns the new pane with strategy info.",
+  {},
+  async () => {
+    try {
+      // Determine target window: start from agent's own pane if available,
+      // otherwise the active pane of the first in-scope session.
+      const selfPane = getSelfPaneId();
+      let targetWindowId: string;
+      let targetSessionId: string;
+
+      if (selfPane) {
+        const loc = await tmux.getPaneLocation(selfPane);
+        targetWindowId = loc.windowId;
+        targetSessionId = loc.sessionId;
+      } else {
+        // Fall back to the first available session/window in scope.
+        let sessions = await tmux.listSessions();
+        if (isScopeActive()) {
+          const filtered = [];
+          for (const s of sessions) {
+            if (await isInScope(s.id, 'session')) filtered.push(s);
+          }
+          sessions = filtered;
+        }
+        if (sessions.length === 0) {
+          return { content: [{ type: "text", text: "No tmux sessions available." }], isError: true };
+        }
+        targetSessionId = sessions[0].id;
+        let windows = await tmux.listWindows(targetSessionId);
+        if (isWindowScope()) {
+          const filtered = [];
+          for (const w of windows) {
+            if (await isInScope(w.id, 'window')) filtered.push(w);
+          }
+          windows = filtered;
+        }
+        if (windows.length === 0) {
+          return { content: [{ type: "text", text: "No tmux windows available in scope." }], isError: true };
+        }
+        const active = windows.find(w => w.active) ?? windows[0];
+        targetWindowId = active.id;
+      }
+
+      await assertInScope(targetWindowId, 'window');
+
+      // Inventory panes in the target window with sizes.
+      const panes = await tmux.listPanesWithSize(targetWindowId);
+
+      // For each pane (excluding self), compute the best split-direction and
+      // the resulting "score" = larger of (width_after_h_split, height_after_v_split).
+      type Candidate = { paneId: string; direction: 'horizontal' | 'vertical'; score: number };
+      const candidates: Candidate[] = [];
+      for (const p of panes) {
+        if (isExcludedPane(p.id)) continue;
+        // Estimate post-split dimension: tmux splits evenly by default and
+        // consumes 1 cell for the new border between the two resulting panes.
+        const hAfter = Math.floor((p.width - 1) / 2);
+        const vAfter = Math.floor((p.height - 1) / 2);
+        const canH = p.width >= NEW_PANE_SMART_MIN_WIDTH;
+        const canV = p.height >= NEW_PANE_SMART_MIN_HEIGHT;
+        if (canH) candidates.push({ paneId: p.id, direction: 'horizontal', score: hAfter });
+        if (canV) candidates.push({ paneId: p.id, direction: 'vertical', score: vAfter });
+      }
+
+      if (candidates.length > 0) {
+        // Largest resulting dimension wins.
+        candidates.sort((a, b) => b.score - a.score);
+        const winner = candidates[0];
+        const newPane = await tmux.splitPane(winner.paneId, winner.direction);
+        if (newPane) {
+          return {
+            content: [{
+              type: "text",
+              text: `New pane created: ${JSON.stringify({
+                ...newPane,
+                strategy: 'split',
+                splitOf: winner.paneId,
+                direction: winner.direction,
+                reason: `largest available dimension after split (${winner.score} cells)`,
+              }, null, 2)}`
+            }]
+          };
+        }
+        // splitPane returned null: fall through to new-window fallback.
+      }
+
+      // No splittable pane found (or split returned null). Try new-window
+      // fallback unless scope forbids it.
+      if (getScopeMode() === 'window') {
+        return {
+          content: [{
+            type: "text",
+            text: `No pane in window ${targetWindowId} has enough room to split (min ${NEW_PANE_SMART_MIN_WIDTH}x${NEW_PANE_SMART_MIN_HEIGHT}), and scope=window blocks creating new windows. Resize the window or use a different scope.`
+          }],
+          isError: true
+        };
+      }
+
+      const windowName = `pane-${Date.now().toString(36)}`;
+      const newWin = await tmux.createWindow(targetSessionId, windowName, false);
+      if (!newWin) {
+        return {
+          content: [{ type: "text", text: `Failed to create fallback window in session ${targetSessionId}.` }],
+          isError: true
+        };
+      }
+      const winPanes = await tmux.listPanes(newWin.id);
+      if (winPanes.length === 0) {
+        return {
+          content: [{ type: "text", text: `Fallback window ${newWin.id} reports no panes.` }],
+          isError: true
+        };
+      }
+      return {
+        content: [{
+          type: "text",
+          text: `New pane created: ${JSON.stringify({
+            id: winPanes[0].id,
+            windowId: newWin.id,
+            sessionId: targetSessionId,
+            title: winPanes[0].title,
+            active: winPanes[0].active,
+            strategy: 'new-window',
+            reason: 'no pane in target window had enough room to split',
+          }, null, 2)}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Error creating smart new pane: ${error}` }],
+        isError: true
+      };
+    }
+  }
+);
+
 // Move window - Tool
 const moveWindowTool = server.tool(
   "move-window",

@@ -190,6 +190,41 @@ export async function listPanes(windowId: string): Promise<TmuxPane[]> {
   });
 }
 
+export interface TmuxPaneWithSize extends TmuxPane {
+  width: number;
+  height: number;
+}
+
+/**
+ * List panes in a window including their current width/height in cells.
+ * Used by smart-placement tools that need to evaluate splittability.
+ */
+export async function listPanesWithSize(windowId: string): Promise<TmuxPaneWithSize[]> {
+  const format = "#{pane_id}:#{pane_title}:#{?pane_active,1,0}:#{pane_width}:#{pane_height}";
+  const output = await executeTmux(['list-panes', '-t', windowId, '-F', format]);
+  if (!output) return [];
+  return output.split('\n').map(line => {
+    const [id, title, active, width, height] = line.split(':');
+    return {
+      id,
+      windowId,
+      title,
+      active: active === '1',
+      width: parseInt(width, 10) || 0,
+      height: parseInt(height, 10) || 0,
+    };
+  });
+}
+
+/**
+ * Get the window id and session id of a given pane in a single tmux call.
+ */
+export async function getPaneLocation(paneId: string): Promise<{ windowId: string; sessionId: string }> {
+  const out = await executeTmux(['display-message', '-p', '-t', paneId, '#{window_id}:#{session_id}']);
+  const [windowId, sessionId] = out.split(':');
+  return { windowId, sessionId };
+}
+
 /**
  * Capture content from a specific pane, by default the latest 200 lines.
  *
