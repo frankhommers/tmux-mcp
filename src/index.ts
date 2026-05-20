@@ -682,7 +682,9 @@ server.tool(
       type Candidate = { paneId: string; direction: 'horizontal' | 'vertical'; score: number };
       const candidates: Candidate[] = [];
       for (const p of panes) {
-        if (isExcludedPane(p.id)) continue;
+        // Splitting any pane (including the agent's own self-pane) is safe:
+        // tmux creates a new sibling and only resizes the target. We do not
+        // write to or execute commands in the target pane.
         // Estimate post-split dimension: tmux splits evenly by default and
         // consumes 1 cell for the new border between the two resulting panes.
         const hAfter = Math.floor((p.width - 1) / 2);
