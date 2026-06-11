@@ -321,25 +321,36 @@ export async function splitPane(
   direction: 'horizontal' | 'vertical' = 'vertical',
   size?: number
 ): Promise<TmuxPane | null> {
-  // Build the split-window args
-  const args = ['split-window', direction === 'horizontal' ? '-h' : '-v', '-t', targetPaneId];
+  // Ask tmux to print the *new* pane's details as part of the same atomic
+  // split-window call (-P -F). This is the only reliable way to identify the
+  // created pane: list-panes is ordered by pane_index (layout order), not by
+  // creation order, so "the last pane in the list" is wrong whenever a
+  // non-last pane is split (e.g. new-pane-smart targeting the largest pane).
+  // pane_title is placed last in the format because it may contain ':';
+  // every field before it (pane_id '%N', window_id '@N', active '0'/'1') is
+  // colon-free, so the title is recovered by re-joining the remaining parts.
+  const fmt = '#{pane_id}:#{window_id}:#{?pane_active,1,0}:#{pane_title}';
+  const args = ['split-window', direction === 'horizontal' ? '-h' : '-v', '-P', '-F', fmt, '-t', targetPaneId];
 
   // Add size if specified (as percentage)
   if (size !== undefined && size > 0 && size < 100) {
     args.push('-p', String(size));
   }
 
-  // Execute the split command
-  await executeTmux(args);
+  // Execute the split command; tmux prints exactly one line describing the new pane.
+  const output = await executeTmux(args);
+  const line = output.split('\n')[0]?.trim();
+  if (!line) return null;
 
-  // Get the window ID from the target pane to list all panes
-  const windowInfo = await executeTmux(['display-message', '-p', '-t', targetPaneId, '#{window_id}']);
+  const parts = line.split(':');
+  if (parts.length < 4) return null;
 
-  // List all panes in the window to find the newly created one
-  const panes = await listPanes(windowInfo);
-
-  // The newest pane is typically the last one in the list
-  return panes.length > 0 ? panes[panes.length - 1] : null;
+  return {
+    id: parts[0],
+    windowId: parts[1],
+    active: parts[2] === '1',
+    title: parts.slice(3).join(':'),
+  };
 }
 
 // Map to track ongoing command executions
