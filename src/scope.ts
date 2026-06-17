@@ -34,7 +34,13 @@ export function initScope(mode: string): void {
 export async function ensureScopeResolved(): Promise<void> {
   if (scopeMode === 'none' || scopeResolved) return;
 
-  // Both 'session' and 'window' need session resolution
+  // Both 'session' and 'window' anchor the scope on the server's OWN pane,
+  // identified by $TMUX_PANE. The session/window MUST be resolved relative to
+  // that pane (display-message -t "$TMUX_PANE"). Resolving without -t returns
+  // tmux's ambient "current" session — the most recently active client — which
+  // is NOT necessarily the pane the server runs in. With multiple attached
+  // clients/agents that mismatch scopes an agent to the wrong session, so it
+  // sees another agent's panes.
   const tmuxEnv = process.env.TMUX;
   if (!tmuxEnv) {
     throw new Error(
@@ -43,8 +49,16 @@ export async function ensureScopeResolved(): Promise<void> {
     );
   }
 
+  const paneEnv = process.env.TMUX_PANE;
+  if (!paneEnv) {
+    throw new Error(
+      `Scope "${scopeMode}" is active but $TMUX_PANE is not set. ` +
+      'The MCP server must be running inside a tmux pane for scoping to work.'
+    );
+  }
+
   try {
-    const sessionId = await executeTmux(['display-message', '-p', '#{session_id}']);
+    const sessionId = await executeTmux(['display-message', '-p', '-t', paneEnv, '#{session_id}']);
     if (!sessionId) {
       throw new Error('Could not determine current tmux session ID.');
     }
@@ -53,16 +67,8 @@ export async function ensureScopeResolved(): Promise<void> {
     throw new Error(`Failed to detect tmux session for scoping: ${error.message}`);
   }
 
-  // 'window' additionally needs window resolution
+  // 'window' additionally needs window resolution (also anchored on $TMUX_PANE)
   if (scopeMode === 'window') {
-    const paneEnv = process.env.TMUX_PANE;
-    if (!paneEnv) {
-      throw new Error(
-        'Scope "window" is active but $TMUX_PANE is not set. ' +
-        'The MCP server must be running inside a tmux pane for window scoping to work.'
-      );
-    }
-
     try {
       const windowId = await executeTmux(['display-message', '-p', '-t', paneEnv, '#{window_id}']);
       if (!windowId) {
