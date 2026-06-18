@@ -806,7 +806,7 @@ const moveWindowTool = server.tool(
 // Execute command in pane (fire-and-forget async) - Tool
 server.tool(
   "execute-command-async",
-  "Fire-and-forget: send a command to a tmux pane and return a commandId immediately. Use `get-command-result` to poll for completion and output. For interactive applications (REPLs, editors), use `rawMode=true`. IMPORTANT: When `rawMode=false` (default), avoid heredoc syntax (cat << EOF) and other multi-line constructs as they conflict with command wrapping. For file writing, prefer: printf 'content\\n' > file, echo statements, or write to temp files instead. If you want to block until the command finishes, use `execute-command-kill-after` or `execute-command-wait-for-exit` instead.",
+  "Fire-and-forget: send a command to a tmux pane and return a commandId immediately. Use `get-command-result` to poll for completion and output. For interactive applications (REPLs, editors), use `rawMode=true`. IMPORTANT: When `rawMode=false` (default), avoid heredoc syntax (cat << EOF) and other multi-line constructs as they conflict with command wrapping. For file writing, prefer: printf 'content\\n' > file, echo statements, or write to temp files instead. If you want to block until the command finishes, use `execute-command-kill-after` or `execute-command-wait-for-exit` instead. To detect that this command finished or to read its output, poll `get-command-result` (or use the blocking tools above) — do NOT use `wait-for-pane-content` for that, since it can miss output that already printed for fast commands.",
   {
     paneId: z.string().describe("ID of the tmux pane"),
     command: z.string().describe("Command to execute"),
@@ -1331,12 +1331,12 @@ server.tool(
 // ── wait-for-pane-content ──────────────────────────────────────────────
 server.tool(
   "wait-for-pane-content",
-  `Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Useful for waiting until a command produces specific output, a server becomes ready, or a prompt returns. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer waits, use \`execute-command-async\` + \`get-command-result\`, or chunk the wait into smaller calls. By default (ignoreExisting=true), takes a baseline snapshot when called and only matches against NEW content that appears after the call, preventing false positives from pre-existing pane content. Set ignoreExisting=false to search all visible content including pre-existing text.\n\n${progressTokenNote()}`,
+  `Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Useful for waiting until a server becomes ready, a prompt/REPL state returns, or output appears that you did NOT launch as a tracked command. To wait for a command YOU launched to finish or produce output, prefer \`execute-command-wait-for-exit\`, or \`execute-command-async\` + \`get-command-result\` (marker-based, race-free) — those cannot miss output, this tool can. ORDERING/RACE: the baseline is captured when THIS tool is called, not before your command ran, so a command that finishes before you call this tool already has its output on screen; with the default ignoreExisting=true that output counts as pre-existing and is NOT matched, causing a false timeout — set ignoreExisting=false in that case. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer waits, use \`execute-command-async\` + \`get-command-result\`, or chunk the wait into smaller calls. By default (ignoreExisting=true), takes a baseline snapshot when called and only matches against NEW content that appears after the call, preventing false positives from pre-existing pane content. Set ignoreExisting=false to search all visible content including pre-existing text.\n\n${progressTokenNote()}`,
   {
     paneId: z.string().describe("ID of the tmux pane"),
     text: z.string().describe("Text or regex pattern to wait for"),
     regex: z.boolean().optional().describe("Interpret 'text' as a regular expression. Default: false"),
-    ignoreExisting: z.boolean().optional().describe("When true (default), takes a baseline snapshot of the current pane content and only matches against NEW lines that appear after this tool is called. Prevents false positives from pre-existing content. Set to false to search all visible content. Default: true"),
+    ignoreExisting: z.boolean().optional().describe("When true (default), takes a baseline snapshot of the current pane content and only matches against NEW lines that appear after this tool is called. Prevents false positives from pre-existing content. IMPORTANT: set ignoreExisting=false when the text may ALREADY be on screen by the time this tool runs (e.g. fast/instant output from a command that already finished, or earlier content you still want to match) — otherwise it is treated as pre-existing and missed, causing a false timeout. Keep the default true only when you must distinguish NEW output from identical earlier output AND can guarantee this wait starts before that output appears. Default: true"),
     timeoutSeconds: z.number().positive().describe("Maximum seconds to wait before returning a timeout error"),
     pollIntervalMs: z.number().positive().optional().describe("How often to check pane content in milliseconds. Default: 500"),
     lines: z.string().optional().describe("Number of lines to capture from the pane. Default: visible pane content")
@@ -1374,7 +1374,10 @@ server.tool(
       if (result.found) {
         return { content: [{ type: "text", text: `Found: ${result.matchedLine}` }] };
       } else {
-        return { content: [{ type: "text", text: `Timeout after ${timeoutSeconds}s: pattern not found in pane content` }], isError: true };
+        const hint = ignoreExisting === false
+          ? ""
+          : ` (searched only NEW content since this call; ignoreExisting=true). If the text may already have been on screen before this call (e.g. a fast command that already finished), retry with ignoreExisting=false, or use get-command-result / execute-command-wait-for-exit for commands you launched.`;
+        return { content: [{ type: "text", text: `Timeout after ${timeoutSeconds}s: pattern not found in pane content${hint}` }], isError: true };
       }
     } catch (error) {
       return { content: [{ type: "text", text: `Error waiting for pane content: ${error}` }], isError: true };
@@ -1385,12 +1388,12 @@ server.tool(
 // ── wait-for-pane-content-gone ─────────────────────────────────────────
 server.tool(
   "wait-for-pane-content-gone",
-  `Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals. Checks only the visible content controlled by the 'lines' parameter, not full scrollback history. Text that has scrolled out of the capture window is considered 'gone'. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer waits, use \`execute-command-async\` + \`get-command-result\`, or chunk the wait into smaller calls. By default (ignoreExisting=true), takes a baseline snapshot when called and only checks NEW content that appears after the call. The pattern is considered 'gone' if it does not appear in any new lines. Set ignoreExisting=false to check all visible content including pre-existing text.\n\n${progressTokenNote()}`,
+  `Wait for text or regex pattern to disappear from pane content. Polls the currently visible pane content at regular intervals. Checks only the visible content controlled by the 'lines' parameter, not full scrollback history. Text that has scrolled out of the capture window is considered 'gone'. IMPORTANT: for 'gone' you almost always want ignoreExisting=false, so an occurrence already on screen counts; with the default ignoreExisting=true a pattern present in the baseline is filtered out and this tool may report it 'gone' immediately. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer waits, use \`execute-command-async\` + \`get-command-result\`, or chunk the wait into smaller calls. By default (ignoreExisting=true), takes a baseline snapshot when called and only checks NEW content that appears after the call. The pattern is considered 'gone' if it does not appear in any new lines. Set ignoreExisting=false to check all visible content including pre-existing text.\n\n${progressTokenNote()}`,
   {
     paneId: z.string().describe("ID of the tmux pane"),
     text: z.string().describe("Text or regex pattern to wait for to disappear"),
     regex: z.boolean().optional().describe("Interpret 'text' as a regular expression. Default: false"),
-    ignoreExisting: z.boolean().optional().describe("When true (default), takes a baseline snapshot of the current pane content and only checks NEW lines that appear after this tool is called. Set to false to check all visible content. Default: true"),
+    ignoreExisting: z.boolean().optional().describe("When true (default), takes a baseline snapshot of the current pane content and only checks NEW lines that appear after this tool is called. IMPORTANT: for waiting until existing text disappears you almost always want ignoreExisting=false; with the default true an occurrence already in the baseline is ignored and the tool may report 'gone' immediately. Set to false to check all visible content. Default: true"),
     timeoutSeconds: z.number().positive().describe("Maximum seconds to wait before returning a timeout error"),
     pollIntervalMs: z.number().positive().optional().describe("How often to check pane content in milliseconds. Default: 500"),
     lines: z.string().optional().describe("Number of lines to capture from the pane. Default: visible pane content")
@@ -1428,7 +1431,10 @@ server.tool(
       if (result.gone) {
         return { content: [{ type: "text", text: "Pattern no longer found in pane content" }] };
       } else {
-        return { content: [{ type: "text", text: `Timeout after ${timeoutSeconds}s: pattern still present in pane content` }], isError: true };
+        const hint = ignoreExisting === false
+          ? ""
+          : ` (checked only NEW content since this call; ignoreExisting=true). To wait for text that is already on screen to disappear, retry with ignoreExisting=false.`;
+        return { content: [{ type: "text", text: `Timeout after ${timeoutSeconds}s: pattern still present in pane content${hint}` }], isError: true };
       }
     } catch (error) {
       return { content: [{ type: "text", text: `Error waiting for pane content gone: ${error}` }], isError: true };
