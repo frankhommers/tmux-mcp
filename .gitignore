@@ -4,3 +4,4 @@ build/
 *.log
 .agent-session-logs
 .yolo.json
+.worktrees/
