@@ -38,6 +38,7 @@ interface CommandExecution {
   result?: string;
   exitCode?: number;
   rawMode?: boolean;
+  capturedOutput?: string;
 }
 
 /**
@@ -46,18 +47,22 @@ interface CommandExecution {
  */
 const MAX_BASE64_PAYLOAD = 131072;
 
+async function executeTmuxRaw(args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFile('tmux', args);
+    return stdout;
+  } catch (error: any) {
+    throw new Error(`Failed to execute tmux command: ${error.message}`);
+  }
+}
+
 /**
- * Execute a tmux command and return the result.
+ * Execute a tmux command and return the trimmed result.
  * Uses execFile to pass arguments directly without shell interpretation,
  * preventing command injection.
  */
 export async function executeTmux(args: string[]): Promise<string> {
-  try {
-    const { stdout } = await execFile('tmux', args);
-    return stdout.trim();
-  } catch (error: any) {
-    throw new Error(`Failed to execute tmux command: ${error.message}`);
-  }
+  return (await executeTmuxRaw(args)).trim();
 }
 
 /**
@@ -228,9 +233,10 @@ export async function getPaneLocation(paneId: string): Promise<{ windowId: strin
 /**
  * Capture content from a specific pane, by default the latest 200 lines.
  *
- * Note: tmux's `-S -N` flag means "start N lines above the visible pane",
+ * Note: tmux's `-S -<lines>` argument starts above the visible pane,
  * but the visible pane content is always included, so the raw output is
- * approximately N + pane_height lines. We trim to exactly N lines here.
+ * approximately the requested history plus pane_height lines. We return at
+ * most the requested number of visual lines.
  */
 export async function capturePaneContent(paneId: string, lines: number = 200, includeColors: boolean = false): Promise<string> {
   const args = ['capture-pane', '-p'];
@@ -242,6 +248,34 @@ export async function capturePaneContent(paneId: string, lines: number = 200, in
     return allLines.slice(-lines).join('\n');
   }
   return content;
+}
+
+async function captureTrackedCommandContent(paneId: string, lines: number = 3000): Promise<string> {
+  const cursorY = await executeTmux([
+    'display-message',
+    '-p',
+    '-t',
+    paneId,
+    '#{cursor_y}',
+  ]);
+  const raw = await executeTmuxRaw([
+    'capture-pane',
+    '-p',
+    '-J',
+    '-t',
+    paneId,
+    '-S',
+    `-${lines}`,
+    '-E',
+    cursorY,
+  ]);
+  const content = raw.endsWith('\r\n')
+    ? raw.slice(0, -2)
+    : raw.endsWith('\n')
+      ? raw.slice(0, -1)
+      : raw;
+  const allLines = content.split('\n');
+  return allLines.length > lines ? allLines.slice(-lines).join('\n') : content;
 }
 
 /**
@@ -356,6 +390,11 @@ export async function splitPane(
 // Map to track ongoing command executions
 const activeCommands = new Map<string, CommandExecution>();
 
+interface CommandOutputSnapshot {
+  output: string;
+  exitCode: number | null;
+}
+
 // Listeners notified when a tracked command transitions from 'pending' to a
 // terminal state ('completed' or 'error'). Used by the MCP server to emit
 // `notifications/resources/updated` for `tmux://command/{id}/result`.
@@ -451,52 +490,74 @@ export async function executeCommand(
   return commandId;
 }
 
+function parseCommandOutput(command: CommandExecution, content: string): CommandOutputSnapshot | null {
+  const startMarker = getStartMarkerText(command);
+  const startIndex = content.lastIndexOf(startMarker);
+  if (startIndex === -1) return null;
+
+  const outputStart = startIndex + startMarker.length;
+  const endMarkerPrefix = getEndMarkerPrefix(command);
+  const endMarkerRegex = new RegExp(`^${endMarkerPrefix}(\\d+)\\r?$`, 'gm');
+  const contentAfterStart = content.substring(outputStart);
+  let endMarkerMatch: RegExpExecArray | null;
+  let matchingEndMarker: RegExpExecArray | null = null;
+
+  while ((endMarkerMatch = endMarkerRegex.exec(contentAfterStart)) !== null) {
+    matchingEndMarker = endMarkerMatch;
+  }
+
+  const outputEnd = matchingEndMarker
+    ? outputStart + matchingEndMarker.index
+    : content.length;
+  let output = content.substring(outputStart, outputEnd);
+
+  if (output.startsWith('\r\n')) {
+    output = output.substring(2);
+  } else if (output.startsWith('\n')) {
+    output = output.substring(1);
+  }
+
+  if (matchingEndMarker) {
+    if (output.endsWith('\r\n')) {
+      output = output.substring(0, output.length - 2);
+    } else if (output.endsWith('\n')) {
+      output = output.substring(0, output.length - 1);
+    }
+  }
+
+  return {
+    output,
+    exitCode: matchingEndMarker ? parseInt(matchingEndMarker[1], 10) : null,
+  };
+}
+
 export async function checkCommandStatus(commandId: string): Promise<CommandExecution | null> {
   const command = activeCommands.get(commandId);
   if (!command) return null;
 
   if (command.status !== 'pending') return command;
 
-  const content = await capturePaneContent(command.paneId, 3000);
+  const content = await captureTrackedCommandContent(command.paneId);
 
   if (command.rawMode) {
     command.result = 'Status tracking unavailable for rawMode commands. Use capture-pane to monitor interactive apps instead.';
     return command;
   }
 
-  const startMarkerText = getStartMarkerText(command)
-  const endMarkerPrefix = getEndMarkerPrefix(command)
-
-  // Find the last occurrence of the markers
-  const startIndex = content.lastIndexOf(startMarkerText);
-  const endIndex = content.lastIndexOf(endMarkerPrefix);
-
-  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+  const snapshot = parseCommandOutput(command, content);
+  if (!snapshot) {
     command.result = "Command output could not be captured properly";
     return command;
   }
 
-  // Extract exit code from the end marker line
-  const endLine = content.substring(endIndex).split('\n')[0];
-  const endMarkerRegex = new RegExp(`${endMarkerPrefix}(\\d+)`);
-  const exitCodeMatch = endLine.match(endMarkerRegex);
-
-  if (exitCodeMatch) {
-    const exitCode = parseInt(exitCodeMatch[1], 10);
+  command.capturedOutput = snapshot.output;
+  command.result = snapshot.output;
+  if (snapshot.exitCode !== null) {
+    const exitCode = snapshot.exitCode;
 
     const newStatus: 'completed' | 'error' = exitCode === 0 ? 'completed' : 'error';
     command.status = newStatus;
     command.exitCode = exitCode;
-
-    // Extract output between the start and end markers
-    const outputStart = startIndex + startMarkerText.length;
-    const outputContent = content.substring(outputStart, endIndex);
-
-    // Skip the first newline after the start marker if present, then trim
-    const firstNewlineIndex = outputContent.indexOf('\n');
-    command.result = firstNewlineIndex !== -1 
-      ? outputContent.substring(firstNewlineIndex + 1).trim()
-      : outputContent.trim();
 
     // Update in map
     activeCommands.set(commandId, command);
@@ -603,7 +664,7 @@ function buildWrappedCommand(
   // and either match a bogus end-marker (no exit code) or — worse — mark the
   // command done when it never actually ran.
   const startEcho = `echo "TMUX""_MCP_START_${idShort}"`;
-  const endEcho = `echo "TMUX""_MCP_DONE_${idShort}_$?"`;
+  const endEcho = `TMUX_MCP_EXIT_CODE=$?; printf '\\r\\n%s\\r\\n' "TMUX""_MCP_DONE_${idShort}_$TMUX_MCP_EXIT_CODE"`;
 
   // Human-readable label so the user can see what command is running.
   // When displayLabel is provided, use it instead of the raw command — useful
@@ -686,6 +747,108 @@ export interface WaitForPaneContentOptions {
   lines?: number;
   ignoreExisting?: boolean;
   progress?: ProgressEmitter;
+}
+
+export type CommandContentWaitStatus = 'matched' | 'exited_without_match' | 'timed_out';
+
+export interface CommandContentWaitResult {
+  commandId: string;
+  status: CommandContentWaitStatus;
+  commandStatus: 'pending' | 'completed' | 'error';
+  exitCode: number | null;
+  output: string;
+  matchedLine?: string;
+}
+
+export interface CommandContentWaitOptions {
+  regex?: boolean;
+  timeoutSeconds: number;
+  pollIntervalMs?: number;
+  suppressHistory?: boolean;
+  progress?: ProgressEmitter;
+}
+
+function createLineMatcher(pattern: string, regex: boolean = false): (line: string) => boolean {
+  if (!regex) return line => line.includes(pattern);
+
+  try {
+    const matcher = new RegExp(pattern);
+    return line => matcher.test(line);
+  } catch (error: any) {
+    throw new Error(`Invalid regex pattern "${pattern}": ${error.message}`);
+  }
+}
+
+export async function executeCommandWaitForContent(
+  paneId: string,
+  command: string,
+  pattern: string,
+  opts: CommandContentWaitOptions,
+): Promise<CommandContentWaitResult> {
+  if (pattern.length === 0) {
+    throw new Error('pattern must not be empty');
+  }
+  const matches = createLineMatcher(pattern, opts.regex);
+  if (!Number.isFinite(opts.timeoutSeconds) || opts.timeoutSeconds <= 0) {
+    throw new Error('timeoutSeconds must be a positive finite number');
+  }
+  if (opts.pollIntervalMs !== undefined &&
+      (!Number.isFinite(opts.pollIntervalMs) || opts.pollIntervalMs <= 0)) {
+    throw new Error('pollIntervalMs must be a positive finite number');
+  }
+
+  const deadline = Date.now() + opts.timeoutSeconds * 1000;
+  const commandId = await executeCommand(paneId, command, {
+    suppressHistory: opts.suppressHistory,
+  });
+  const pollIntervalMs = opts.pollIntervalMs ?? 500;
+  let commandState = getCommand(commandId);
+  if (!commandState) throw new Error(`Tracked command ${commandId} not found`);
+
+  const timedOut = (): CommandContentWaitResult => ({
+    commandId,
+    status: 'timed_out',
+    commandStatus: commandState!.status,
+    exitCode: commandState!.exitCode ?? null,
+    output: commandState!.capturedOutput ?? '',
+  });
+
+  while (true) {
+    if (Date.now() >= deadline) return timedOut();
+
+    commandState = await checkCommandStatus(commandId);
+    if (!commandState) throw new Error(`Tracked command ${commandId} not found`);
+    if (Date.now() >= deadline) return timedOut();
+
+    const output = commandState.capturedOutput ?? '';
+    const matchedLine = output.split('\n').find(matches);
+    if (matchedLine !== undefined) {
+      return {
+        commandId,
+        status: 'matched',
+        commandStatus: commandState.status,
+        exitCode: commandState.exitCode ?? null,
+        output,
+        matchedLine,
+      };
+    }
+
+    if (commandState.status !== 'pending') {
+      return {
+        commandId,
+        status: 'exited_without_match',
+        commandStatus: commandState.status,
+        exitCode: commandState.exitCode ?? null,
+        output,
+      };
+    }
+
+    await opts.progress?.tickIfDue(`waiting for command content in pane ${paneId}`);
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return timedOut();
+    await sleep(Math.min(pollIntervalMs, remaining));
+  }
 }
 
 /**
@@ -1163,10 +1326,6 @@ async function pollPaneContent(
 
   while (Date.now() < deadline) {
     const content = await capturePaneContent(paneId, options.lines ?? 200);
-    // Successful capture — eligible to emit keepalive. If capturePaneContent
-    // had thrown or hung, we'd never reach this line, which is the desired
-    // behavior.
-    await options.progress?.tickIfDue(`polling pane ${paneId}`);
     const allLines = content.split('\n');
 
     // When we have a baseline, only consider lines not in the baseline.
@@ -1208,6 +1367,9 @@ async function pollPaneContent(
       return { matched: true };
     }
 
+    // Emit only after a successful capture that did not satisfy the wait.
+    await options.progress?.tickIfDue(`polling pane ${paneId}`);
+
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
     await sleep(Math.max(Math.min(pollInterval, remaining), 0));
@@ -1247,4 +1409,3 @@ export async function waitForPaneContentGone(
   }
   return { gone: false };
 }
-

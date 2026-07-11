@@ -69,7 +69,7 @@ function maxSecondsPhrase(): string {
 }
 
 function progressTokenNote(): string {
-  return "When the client sends a `progressToken` (per the MCP spec), this server emits `notifications/progress` every ~25s during the wait and the cap above does NOT apply — `timeoutSeconds`/`seconds` is honored as-is. When the client does not send a token, the cap is enforced.";
+  return "When the client sends a `progressToken` (per the MCP spec), the cap above does NOT apply — `timeoutSeconds`/`seconds` is honored as-is. The first `notifications/progress` message is emitted after the first successful poll that leaves the operation pending (or the first sleep tick), then approximately every 25s after successful pending polls/ticks. If polling fails or hangs, no notification is emitted. When the client does not send a token, the cap is enforced.";
 }
 
 // Create MCP server
@@ -806,7 +806,7 @@ const moveWindowTool = server.tool(
 // Execute command in pane (fire-and-forget async) - Tool
 server.tool(
   "execute-command-async",
-  "Fire-and-forget: send a command to a tmux pane and return a commandId immediately. Use `get-command-result` to poll for completion and output. For interactive applications (REPLs, editors), use `rawMode=true`. IMPORTANT: When `rawMode=false` (default), avoid heredoc syntax (cat << EOF) and other multi-line constructs as they conflict with command wrapping. For file writing, prefer: printf 'content\\n' > file, echo statements, or write to temp files instead. If you want to block until the command finishes, use `execute-command-kill-after` or `execute-command-wait-for-exit` instead. To detect that this command finished or to read its output, poll `get-command-result` (or use the blocking tools above) — do NOT use `wait-for-pane-content` for that, since it can miss output that already printed for fast commands.",
+  "Fire-and-forget: send a command to a tmux pane and return a commandId immediately. Use `get-command-result` to poll for completion and output. When waiting for output from a command you launch, use `execute-command-wait-for-content` instead. For interactive applications (REPLs, editors), use `rawMode=true`. IMPORTANT: When `rawMode=false` (default), avoid heredoc syntax (cat << EOF) and other multi-line constructs as they conflict with command wrapping. For file writing, prefer: printf 'content\\n' > file, echo statements, or write to temp files instead. If you want to block until the command finishes, use `execute-command-kill-after` or `execute-command-wait-for-exit` instead. To detect that this command finished or to read its output, poll `get-command-result` (or use the blocking tools above) — do NOT use `wait-for-pane-content` for that, since it can miss output that already printed for fast commands.",
   {
     paneId: z.string().describe("ID of the tmux pane"),
     command: z.string().describe("Command to execute"),
@@ -852,6 +852,67 @@ server.tool(
         }],
         isError: true
       };
+    }
+  }
+);
+
+function formatCommandContentWaitResult(res: tmux.CommandContentWaitResult): string {
+  const lines = [
+    `Status: ${res.status}`,
+    `Command status: ${res.commandStatus}`,
+    `Exit code: ${res.exitCode === null ? 'n/a' : res.exitCode}`,
+    `Command ID: ${res.commandId}`,
+  ];
+  if (res.matchedLine !== undefined) lines.push(`Matched line: ${res.matchedLine}`);
+  lines.push('', '--- Output ---', res.output);
+  if (res.status === 'matched' && res.commandStatus === 'pending') {
+    lines.push('', `NOTE: The match returned while Command status is pending. Poll Command ID ${res.commandId} with 'get-command-result' for completion and final output.`);
+  } else if (res.status === 'timed_out') {
+    const running = res.commandStatus === 'pending' ? ' The command is still running in the pane.' : '';
+    lines.push('', `NOTE: Timed out; no interrupt occurred.${running}`);
+  }
+  return lines.join('\n');
+}
+
+// Execute command and wait for content from that tracked command - Tool
+server.tool(
+  "execute-command-wait-for-content",
+  "Atomically starts a tracked command and observes only its own marker-delimited output. Plain-text substring and regex matching are both line-by-line; patterns cannot span lines. The deadline includes command submission, and after every capture the deadline is checked before accepting a newly observed match or exit. A match observed before the deadline takes precedence over an exit observed in the same capture. A successful match may return while `commandStatus` is `pending`; in that case, poll the returned command ID with `get-command-result` for completion and final output. Timeout never interrupts the command, which may already be terminal if that state was captured after the deadline; continue polling only when `commandStatus` is `pending`. `matched` is returned as MCP success; `exited_without_match` and `timed_out` set `isError: true`. Use this rather than `execute-command-async` followed by `wait-for-pane-content`, which has an ordering race and observes pane content outside the command. NOTE: " + clientTimeoutPhrase() + ". Without a progress token, the configured blocking limit applies (`timeoutSeconds`: " + maxSecondsPhrase() + "); requests above any active limit are rejected before the command starts. Does not support rawMode/noEnter.\n\n" + progressTokenNote(),
+  {
+    paneId: z.string().describe("ID of the tmux pane"),
+    command: z.string().describe("Command to execute"),
+    text: z.string().min(1).describe("Non-empty plain text or regex pattern to find in this command's output"),
+    regex: z.boolean().optional().describe("Interpret 'text' as a regular expression. Default: false"),
+    timeoutSeconds: z.number().positive().describe("Maximum seconds to wait for a match or command exit"),
+    pollIntervalMs: z.number().positive().optional().describe("How often to check command output. Default: 500"),
+    suppressHistory: z.boolean().optional().describe("Prepend space so shells with ignorespace/HIST_IGNORE_SPACE (bash/zsh) skip adding the line to history. Default: true."),
+  },
+  async (args, extra) => {
+    try {
+      if (isExcludedPane(args.paneId)) {
+        return { content: [{ type: "text", text: `Access denied: pane ${args.paneId} is the agent's own pane and cannot be interacted with.` }], isError: true };
+      }
+      const progress = createProgressEmitter(extra, "execute-command-wait-for-content");
+      if (!progress.hasToken()) {
+        const cap = checkBlockingTimeout(args.timeoutSeconds);
+        if (!cap.ok) {
+          return { content: [{ type: "text", text: cap.message }], isError: true };
+        }
+      }
+      await assertInScope(args.paneId, 'pane');
+      const result = await tmux.executeCommandWaitForContent(args.paneId, args.command, args.text, {
+        regex: args.regex,
+        timeoutSeconds: args.timeoutSeconds,
+        pollIntervalMs: args.pollIntervalMs,
+        suppressHistory: args.suppressHistory,
+        progress,
+      });
+      return {
+        content: [{ type: "text", text: formatCommandContentWaitResult(result) }],
+        isError: result.status !== 'matched',
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error executing command: ${error}` }], isError: true };
     }
   }
 );
@@ -1331,7 +1392,7 @@ server.tool(
 // ── wait-for-pane-content ──────────────────────────────────────────────
 server.tool(
   "wait-for-pane-content",
-  `Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Useful for waiting until a server becomes ready, a prompt/REPL state returns, or output appears that you did NOT launch as a tracked command. To wait for a command YOU launched to finish or produce output, prefer \`execute-command-wait-for-exit\`, or \`execute-command-async\` + \`get-command-result\` (marker-based, race-free) — those cannot miss output, this tool can. ORDERING/RACE: the baseline is captured when THIS tool is called, not before your command ran, so a command that finishes before you call this tool already has its output on screen; with the default ignoreExisting=true that output counts as pre-existing and is NOT matched, causing a false timeout — set ignoreExisting=false in that case. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer waits, use \`execute-command-async\` + \`get-command-result\`, or chunk the wait into smaller calls. By default (ignoreExisting=true), takes a baseline snapshot when called and only matches against NEW content that appears after the call, preventing false positives from pre-existing pane content. Set ignoreExisting=false to search all visible content including pre-existing text.\n\n${progressTokenNote()}`,
+  `Wait for text or regex pattern to appear in pane content. Polls the currently visible pane content at regular intervals. Use this for external or untracked pane activity, such as waiting until a server becomes ready or a prompt/REPL state returns. For execute-and-wait, use \`execute-command-wait-for-content\`, which atomically tracks only the launched command's output. ORDERING/RACE: the baseline is captured when THIS tool is called, not before your command ran, so a command that finishes before you call this tool already has its output on screen; with the default ignoreExisting=true that output counts as pre-existing and is NOT matched, causing a false timeout — set ignoreExisting=false in that case. NOTE: ${clientTimeoutPhrase()}. This server enforces a hard cap on \`timeoutSeconds\` (${maxSecondsPhrase()}); requests above the cap are rejected. For longer waits, use \`execute-command-async\` + \`get-command-result\`, or chunk the wait into smaller calls. By default (ignoreExisting=true), takes a baseline snapshot when called and only matches against NEW content that appears after the call, preventing false positives from pre-existing pane content. Set ignoreExisting=false to search all visible content including pre-existing text.\n\n${progressTokenNote()}`,
   {
     paneId: z.string().describe("ID of the tmux pane"),
     text: z.string().describe("Text or regex pattern to wait for"),

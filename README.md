@@ -111,6 +111,7 @@ Tools that fall outside the active scope are **removed from the tool list** — 
 - `rename-window` - Rename a tmux window
 - `rename-pane` - Rename a tmux pane (set pane title)
 - `execute-command-async` - Fire-and-forget: send a command and return a commandId immediately (supports `rawMode`/`noEnter`)
+- `execute-command-wait-for-content` - Atomically execute a tracked command and block until its output matches plain text or a regex; returns on command exit observed before the deadline and never interrupts on timeout
 - `execute-command-kill-after` - Execute a command and block with a timeout; uses GNU `timeout`/`gtimeout` if available (kernel-level kill, real exit code), otherwise falls back to sending Ctrl-C and verifying via `pane_current_command`
 - `execute-command-wait-for-exit` - Execute a command and block until it completes (no timeout)
 - `get-command-result` - Get the result of an async command
@@ -125,23 +126,26 @@ Tools that fall outside the active scope are **removed from the tool list** — 
 
 ### Long-running tools and progress notifications
 
-The blocking tools (`execute-command-kill-after`, `execute-command-wait-for-exit`,
-`wait-for-pane-content`, `wait-for-pane-content-gone`, `sleep`) automatically
-adapt to the MCP client's progress-notification capability:
+The blocking tools (`execute-command-kill-after`, `execute-command-wait-for-content`,
+`execute-command-wait-for-exit`, `wait-for-pane-content`,
+`wait-for-pane-content-gone`, `sleep`) automatically adapt to the MCP client's
+progress-notification capability:
 
-- **Client sends a `progressToken`** (per MCP spec): tmux-mcp emits
-  `notifications/progress` every ~25s during the wait. A spec-compliant client
-  with `resetTimeoutOnProgress: true` resets its per-request timer on each
-  notification, so long waits run without hitting the client's timeout. The
-  server's own 59s cap (configurable via `--client-timeout-seconds` /
-  `TMUX_MCP_CLIENT_TIMEOUT_SECONDS`) is automatically lifted in this case —
-  the requested `timeoutSeconds` (or `seconds`) is honored as-is.
+- **Client sends a `progressToken`** (per MCP spec): tmux-mcp emits the first
+  `notifications/progress` message after the first successful poll that leaves
+  the operation pending (or the first successful `sleep` tick), then
+  approximately every 25s after successful pending polls or ticks. A
+  spec-compliant client with `resetTimeoutOnProgress: true` resets its
+  per-request timer on each notification, so long waits run without hitting the
+  client's timeout. The server's own 59s cap (configurable via
+  `--client-timeout-seconds` / `TMUX_MCP_CLIENT_TIMEOUT_SECONDS`) is
+  automatically lifted in this case; the requested `timeoutSeconds` (or
+  `seconds`) is honored as-is.
 
 - **Client does not send a token**: the cap is enforced. For longer work, use
   `execute-command-async` and poll with `get-command-result`.
 
-Notifications are only emitted **after a successful tmux poll**, so a hang in
-this server or its tmux subprocess correctly stops emitting and the client's
+No notification is emitted when tmux polling fails or hangs, so the client's
 unresponsiveness check still works.
 
 For per-server timeout configuration in opencode (anomalyco/opencode#8706),
@@ -150,7 +154,7 @@ without needing progress-notification support.
 
 ### Running Label
 
-Tracked commands (`execute-command-async`, `execute-command-kill-after`, `execute-command-wait-for-exit`) display a human-readable label in the pane output before the command executes, surrounded by separator lines for visibility:
+Tracked commands (`execute-command-async`, `execute-command-wait-for-content`, `execute-command-kill-after`, `execute-command-wait-for-exit`) display a human-readable label in the pane output before the command executes, surrounded by separator lines for visibility:
 
 ```
 ######################
@@ -178,6 +182,49 @@ If no `timeout`/`gtimeout` command is available on the target host, the fallback
 
 This makes it easy to see at a glance what command is running in each pane, the timeout duration, and how it will be enforced.
 
+### Choosing a Wait Tool
+
+- Use `execute-command-wait-for-exit` when command completion is the condition.
+- Use `execute-command-wait-for-content` when output or readiness is the condition.
+- Use `wait-for-pane-content` for external or untracked pane activity.
+
+`execute-command-wait-for-content` atomically starts a tracked command and
+matches only that command's output. Plain-text substring and regex matching are
+both line-by-line, so patterns cannot span lines. Tracked capture joins tmux
+soft-wrapped rows into logical lines. Exact trailing spaces at physical line
+ends are not reliably observable from tmux's terminal grid, so patterns should
+not depend on line-end spaces. Matching is also bounded by captured scrollback;
+extremely noisy output can push command content beyond that limit before it is
+observed.
+
+**Parameters:**
+- `paneId` (string, required) - Target pane ID (e.g. `%0`)
+- `command` (string, required) - Command to execute
+- `text` (string, required) - Non-empty plain text or regex pattern to match
+- `regex` (boolean, optional, default: `false`) - Treat `text` as a regular expression
+- `timeoutSeconds` (number, required) - Maximum seconds to wait for a match or command exit
+- `pollIntervalMs` (number, optional, default: `500`) - How often to check command output in milliseconds
+- `suppressHistory` (boolean, optional, default: `true`) - Prepend a space so supported shells omit the command from history
+
+The deadline starts before command submission, so submission time counts toward
+`timeoutSeconds`. After every capture, the deadline is checked before a newly
+observed match or exit is accepted. A match takes precedence over an exit seen
+in the same capture only when that capture completes before the deadline.
+
+Results use these statuses and MCP error semantics:
+
+- `matched` (`isError: false`) - Matching output was found before the deadline.
+  The command may still have
+  `commandStatus: pending`; poll the returned `commandId` with
+  `get-command-result` for completion and final output.
+- `exited_without_match` (`isError: true`) - The command exit was observed
+  before the deadline without a match.
+- `timed_out` (`isError: true`) - The deadline was reached before a match or
+  exit could be accepted. Timeout never interrupts the command. Its returned
+  `commandStatus` may already be terminal if that state was captured after the
+  deadline; poll the returned `commandId` only when `commandStatus` is
+  `pending`.
+
 ### Wait-for-pane-content Tools
 
 The `wait-for-pane-content` and `wait-for-pane-content-gone` tools poll the currently visible pane content at regular intervals, waiting for a text string or regex pattern to appear or disappear.
@@ -189,6 +236,12 @@ The `wait-for-pane-content` and `wait-for-pane-content-gone` tools poll the curr
 - `timeoutSeconds` (number, required) - Maximum seconds to wait before giving up
 - `pollIntervalMs` (number, optional) - How often to check the pane content in milliseconds
 - `lines` (number, optional) - Number of lines to capture from the pane for matching
+- `ignoreExisting` (boolean, optional, default: `true`) - Match only content that appears after the wait begins
+
+With `ignoreExisting=true`, content already visible when the tool captures its
+baseline is ignored. If output may have appeared before the wait call, set
+`ignoreExisting=false`; for commands launched by the same workflow, prefer
+`execute-command-wait-for-content` to avoid this ordering race.
 
 ### OSC 133 Shell Integration
 
@@ -226,4 +279,3 @@ The `capture-last-output` and `capture-last-command` tools use [OSC 133 semantic
 - `capture-last-command` uses a different strategy: it navigates to the output start (C mark) via `previous-prompt -o`, then moves up one line to the command line and selects the full line. This is necessary because tmux's `next-prompt -o` does not advance from an A mark to the C mark of the same command — tmux treats them as the same prompt region.
 - `capture-last-command` only captures **single-line commands**. Multi-line commands will only get the last line.
 - The command line includes the PS1 prompt prefix (e.g. `➜` or `$`) since tmux doesn't expose the B mark (where user input starts) for navigation.
-
