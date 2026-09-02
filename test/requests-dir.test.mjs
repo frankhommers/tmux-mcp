@@ -80,3 +80,46 @@ async function waitUntil(predicate, timeoutMs) {
   }
   throw new Error('condition not met within timeout');
 }
+
+test('a grant file that is still being written is retried, not dropped', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tmux-mcp-req-'));
+  await writeRequestFile(dir, REQUEST);
+
+  const seen = [];
+  const stop = startAnswerWatcher(dir, (id, answer) => {
+    seen.push([id, answer]);
+    return true;
+  });
+  try {
+    // Simulates a non-atomic write: the file exists before it has content.
+    await writeAnswerFile(dir, REQUEST.id, 'grant', '');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.deepEqual(seen, []);
+
+    await writeAnswerFile(dir, REQUEST.id, 'grant', '%3');
+    await waitUntil(() => seen.length > 0, 5000);
+  } finally {
+    stop();
+  }
+
+  assert.deepEqual(seen[0][1], { status: 'granted', target: '%3', via: 'grant' });
+});
+
+test('an answer the server rejects is retried until it is accepted', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tmux-mcp-req-'));
+  await writeRequestFile(dir, REQUEST);
+
+  let attempts = 0;
+  const stop = startAnswerWatcher(dir, () => {
+    attempts += 1;
+    return attempts > 1;
+  });
+  try {
+    await writeAnswerFile(dir, REQUEST.id, 'grant', '%3');
+    await waitUntil(() => attempts > 1, 5000);
+  } finally {
+    stop();
+  }
+
+  assert.ok(attempts > 1);
+});

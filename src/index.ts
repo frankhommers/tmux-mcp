@@ -1823,10 +1823,15 @@ async function main() {
         cleanupRequest(id);
       });
 
+      // The watcher retries rejected answers, so warn only once per request.
+      const warnedAnswers = new Set<string>();
       const stopWatcher = startAnswerWatcher(requestsDir, (id, answer) => {
-        if (!answerRequest(id, answer)) {
+        if (answerRequest(id, answer)) return true;
+        if (!warnedAnswers.has(id)) {
+          warnedAnswers.add(id);
           logToClient('warning', `ignored answer for ${id} (unknown request or invalid target)`);
         }
+        return false;
       });
       process.once('exit', stopWatcher);
     }

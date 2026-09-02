@@ -65,11 +65,18 @@ export async function writeAnswerFile(
 /**
  * Watch the requests dir for answer files. fs.watch is used when available
  * and backed by a poll, because fs.watch is unreliable on some filesystems.
+ *
+ * `onAnswer` returns whether the answer was accepted. A rejected answer is
+ * retried on the next scan: writing an answer file is not atomic, so a scan
+ * triggered by the file's creation can read it while it is still empty or
+ * truncated. Giving up on the first read would strand the request until it
+ * expired.
+ *
  * Returns a stop function.
  */
 export function startAnswerWatcher(
   dir: string,
-  onAnswer: (id: string, answer: Answer) => void
+  onAnswer: (id: string, answer: Answer) => boolean
 ): () => void {
   const handled = new Set<string>();
 
@@ -93,12 +100,17 @@ export function startAnswerWatcher(
         handled.delete(entry);
         continue;
       }
-      const id = entry.slice(0, entry.lastIndexOf('.'));
-      if (isGrant) {
-        onAnswer(id, { status: 'granted', target: body, via: 'grant' });
-      } else {
-        onAnswer(id, { status: 'denied', reason: body || undefined, via: 'grant' });
+      // A grant names a target, so an empty body means the write is still in
+      // flight. An empty deny is legitimate: a denial without a reason.
+      if (isGrant && body === '') {
+        handled.delete(entry);
+        continue;
       }
+      const id = entry.slice(0, entry.lastIndexOf('.'));
+      const accepted = isGrant
+        ? onAnswer(id, { status: 'granted', target: body, via: 'grant' })
+        : onAnswer(id, { status: 'denied', reason: body || undefined, via: 'grant' });
+      if (!accepted) handled.delete(entry);
     }
   };
 

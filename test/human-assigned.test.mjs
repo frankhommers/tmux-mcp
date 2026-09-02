@@ -182,3 +182,50 @@ test('splitting a granted pane grants the child pane', async () => {
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });
+
+test('a client that supports elicitation is asked directly', async () => {
+  const { ElicitRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
+  const sessionName = `tmux-mcp-ha-${process.pid}-${randomUUID()}`;
+  const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+  const requestsDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ha-'));
+
+  const client = new Client(
+    { name: 'elicit-capable-test', version: '1.0.0' },
+    { capabilities: { elicitation: {} } }
+  );
+  const seen = [];
+  client.setRequestHandler(ElicitRequestSchema, request => {
+    seen.push(request.params);
+    return { action: 'accept', content: { target: paneId } };
+  });
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ['build/index.js', '--human-assigned', `--requests-dir=${requestsDir}`],
+    cwd: process.cwd(),
+    stderr: 'pipe',
+  });
+
+  try {
+    await client.connect(transport);
+    const result = await client.callTool({
+      name: 'request-pane',
+      arguments: { reason: 'run the linter', timeoutSeconds: 15 },
+    });
+
+    assert.ok(!result.isError);
+    assert.match(resultText(result), /^Status: granted$/m);
+    assert.match(resultText(result), /^Assigned via: elicitation$/m);
+    assert.ok(resultText(result).includes(`Pane: ${paneId}`));
+
+    // The human saw the reason and got the pane as a choice; the agent never
+    // received the candidate list itself.
+    assert.equal(seen.length, 1);
+    assert.match(seen[0].message, /run the linter/);
+    assert.ok(seen[0].requestedSchema.properties.target.enum.includes(paneId));
+    assert.ok(seen[0].requestedSchema.properties.target.enum.includes('deny'));
+  } finally {
+    await transport.close();
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});
