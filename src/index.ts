@@ -8,6 +8,7 @@ import * as tmux from "./tmux.js";
 import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId, ensureScopeResolved, initHumanAssigned, isHumanAssigned } from "./scope.js";
 import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
+import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
 
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
@@ -1570,6 +1571,13 @@ function disableToolsByScope(): void {
 
 async function main() {
   try {
+    // Subcommand dispatch: `tmux-mcp requests|grant|deny` is a CLI for humans,
+    // not an MCP server run. It must not touch the stdio the transport uses.
+    const subcommand = process.argv[2];
+    if (isGrantCliCommand(subcommand)) {
+      process.exit(await runGrantCli(process.argv.slice(2)));
+    }
+
     const { values } = parseArgs({
       options: {
         'scope': { type: 'string' },
