@@ -45,9 +45,26 @@ test('accept becomes a grant and the schema offers every candidate', async () =>
   assert.deepEqual(answer, { status: 'granted', target: '%5', via: 'elicitation' });
 
   const schema = server.calls[0].params.requestedSchema;
-  assert.deepEqual(schema.properties.target.enum, ['%3', '%5', 'deny']);
-  assert.equal(schema.properties.target.enumNames.length, 3);
+  assert.deepEqual(schema.properties.target.enum, ['%3', '%5', 'other', 'deny']);
+  assert.equal(schema.properties.target.enumNames.length, 4);
+  assert.equal(schema.properties.otherTarget.type, 'string');
   assert.match(server.calls[0].params.message, /run the tests/);
+});
+
+test('choosing "other" uses the typed id, even for a pane made just now', async () => {
+  const server = fakeServer(() => ({ action: 'accept', content: { target: 'other', otherTarget: ' %42 ' } }));
+  assert.deepEqual(await answerOf(server), { status: 'granted', target: '%42', via: 'elicitation' });
+});
+
+test('choosing "other" without typing anything is ignored', async () => {
+  const server = fakeServer(() => ({ action: 'accept', content: { target: 'other', otherTarget: '  ' } }));
+  const logged = [];
+  const answer = await new Promise(resolve => {
+    startElicitation(server, REQUEST, resolve, (level, msg) => logged.push([level, msg]));
+    setTimeout(() => resolve(null), 500);
+  });
+  assert.equal(answer, null);
+  assert.ok(logged.some(([level]) => level === 'warning'));
 });
 
 test('choosing deny in the form is a denial', async () => {
@@ -76,7 +93,8 @@ test('a throwing client produces no answer and is logged', async () => {
   assert.ok(logged.some(([level]) => level === 'warning'));
 });
 
-test('an unknown target from the client is ignored', async () => {
+test('an id outside the offered list is passed on for live validation', async () => {
+  // The candidate list is advisory; answerRequest() decides what is allowed.
   const server = fakeServer(() => ({ action: 'accept', content: { target: '%99' } }));
-  assert.equal(await answerOf(server), null);
+  assert.deepEqual(await answerOf(server), { status: 'granted', target: '%99', via: 'elicitation' });
 });

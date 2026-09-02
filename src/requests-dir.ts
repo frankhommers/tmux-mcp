@@ -76,7 +76,7 @@ export async function writeAnswerFile(
  */
 export function startAnswerWatcher(
   dir: string,
-  onAnswer: (id: string, answer: Answer) => boolean
+  onAnswer: (id: string, answer: Answer) => boolean | Promise<boolean>
 ): () => void {
   const handled = new Set<string>();
 
@@ -107,9 +107,9 @@ export function startAnswerWatcher(
         continue;
       }
       const id = entry.slice(0, entry.lastIndexOf('.'));
-      const accepted = isGrant
+      const accepted = await (isGrant
         ? onAnswer(id, { status: 'granted', target: body, via: 'grant' })
-        : onAnswer(id, { status: 'denied', reason: body || undefined, via: 'grant' });
+        : onAnswer(id, { status: 'denied', reason: body || undefined, via: 'grant' }));
       if (!accepted) handled.delete(entry);
     }
   };

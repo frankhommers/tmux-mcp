@@ -56,7 +56,7 @@ export function spawnAssignHook(
       log('warning', `assign hook exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`);
       return;
     }
-    const answer = parseHookOutput(stdout, request);
+    const answer = parseHookOutput(stdout);
     if (!answer) {
       log('info', `assign hook for ${request.id} returned no answer (notification only)`);
       return;
@@ -69,7 +69,15 @@ export function spawnAssignHook(
   };
 }
 
-function parseHookOutput(stdout: string, request: PaneRequest): Answer | null {
+/**
+ * The hook may name any pane or window, not just one from the candidate list
+ * it was handed: a human often opens the pane they want to assign after
+ * reading the request. answerRequest() validates the target against live
+ * tmux state, so this only has to recognise the shape of an id.
+ */
+const TARGET_ID = /^[%@]\d+$/;
+
+function parseHookOutput(stdout: string): Answer | null {
   const line = stdout.split('\n').map(l => l.trim()).find(l => l.length > 0);
   if (!line) return null;
   if (line === 'deny') return { status: 'denied', reason: undefined, via: 'hook' };
@@ -77,7 +85,7 @@ function parseHookOutput(stdout: string, request: PaneRequest): Answer | null {
     const reason = line.slice('deny:'.length).trim();
     return { status: 'denied', reason: reason || undefined, via: 'hook' };
   }
-  if (request.candidates.some(candidate => candidate.id === line)) {
+  if (TARGET_ID.test(line)) {
     return { status: 'granted', target: line, via: 'hook' };
   }
   return null;

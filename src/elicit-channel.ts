@@ -12,6 +12,15 @@ export interface ElicitEnumField {
   enumNames?: string[];
 }
 
+export interface ElicitTextField {
+  type: 'string';
+  title?: string;
+  description?: string;
+  maxLength?: number;
+}
+
+export type ElicitField = ElicitEnumField | ElicitTextField;
+
 export interface ElicitCapableServer {
   getClientCapabilities(): { elicitation?: unknown } | undefined;
   elicitInput(
@@ -19,7 +28,7 @@ export interface ElicitCapableServer {
       message: string;
       requestedSchema: {
         type: 'object';
-        properties: { [key: string]: ElicitEnumField };
+        properties: { [key: string]: ElicitField };
         required?: string[];
       };
     },
@@ -29,6 +38,9 @@ export interface ElicitCapableServer {
 
 /** Matches the request expiry, so the prompt outlives the tool call. */
 const ELICITATION_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Dropdown choice for a target that did not exist when the agent asked. */
+const OTHER = 'other';
 
 export function clientSupportsElicitation(server: ElicitCapableServer): boolean {
   return server.getClientCapabilities()?.elicitation !== undefined;
@@ -48,7 +60,7 @@ export function startElicitation(
   const noun = request.kind === 'pane' ? 'pane' : 'window';
 
   const params = {
-    message: `The agent is asking for a tmux ${noun}.\n\nReason: ${request.reason}\n\nPick the ${noun} it may use, or choose "deny".`,
+    message: `The agent is asking for a tmux ${noun}.\n\nReason: ${request.reason}\n\nPick the ${noun} it may use, or choose "deny". The list was taken when the agent asked — if you have opened a ${noun} since then, choose "other" and type its id.`,
     requestedSchema: {
       type: 'object' as const,
       properties: {
@@ -56,8 +68,18 @@ export function startElicitation(
           type: 'string' as const,
           title: `tmux ${noun}`,
           description: `The ${noun} the agent may use.`,
-          enum: [...request.candidates.map(c => c.id), 'deny'],
-          enumNames: [...request.candidates.map(c => c.label), 'Deny this request'],
+          enum: [...request.candidates.map(c => c.id), OTHER, 'deny'],
+          enumNames: [
+            ...request.candidates.map(c => c.label),
+            `Other — type an id below (for a ${noun} opened just now)`,
+            'Deny this request',
+          ],
+        },
+        otherTarget: {
+          type: 'string' as const,
+          title: `Other ${noun} id`,
+          description: `Only used when "other" is selected above. A ${noun} id such as ${request.kind === 'pane' ? '%7' : '@3'}.`,
+          maxLength: 32,
         },
       },
       required: ['target'],
@@ -72,13 +94,17 @@ export function startElicitation(
         return;
       }
       if (result.action !== 'accept') return; // 'cancel': leave it to other channels
-      const target = result.content?.target;
-      if (target === 'deny') {
+      const choice = result.content?.target;
+      if (choice === 'deny') {
         onAnswer({ status: 'denied', reason: undefined, via: 'elicitation' });
         return;
       }
-      if (typeof target === 'string' && request.candidates.some(c => c.id === target)) {
-        onAnswer({ status: 'granted', target, via: 'elicitation' });
+      // The chosen id is validated against live tmux state by answerRequest(),
+      // so a target typed into "other" is as acceptable as one from the list.
+      const typed = result.content?.otherTarget;
+      const target = choice === OTHER ? typed : choice;
+      if (typeof target === 'string' && target.trim().length > 0) {
+        onAnswer({ status: 'granted', target: target.trim(), via: 'elicitation' });
         return;
       }
       log('warning', `elicitation for ${request.id} returned an unusable target`);

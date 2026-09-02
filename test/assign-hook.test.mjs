@@ -77,9 +77,15 @@ test('a failing hook produces no answer and is logged', async () => {
   assert.ok(logged.some(([level]) => level === 'warning'));
 });
 
-test('unknown output is ignored', async () => {
+test('output that is not an id is ignored', async () => {
   const path = await hookScript('echo "maybe later"');
   assert.equal(await runHook(path), null);
+});
+
+test('an id outside the offered list is passed on for live validation', async () => {
+  // The hook may name a pane the human opened after reading the request.
+  const path = await hookScript('echo "%42"');
+  assert.deepEqual(await runHook(path), { status: 'granted', target: '%42', via: 'hook' });
 });
 
 import { access, constants } from 'node:fs/promises';

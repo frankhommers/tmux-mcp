@@ -102,19 +102,28 @@ is refused. `create-session`, `create-window` and `move-window` are removed
 from the tool list.
 
 The agent's request carries a short reason, which the human reads verbatim
-before deciding. A request can be answered through three channels, whichever
-comes first — the agent is in none of them, so it cannot answer its own
-request:
+before deciding. Every channel offers a list of the panes that existed when
+the agent asked, but that list is **advisory**: you may assign any pane or
+window that exists at the moment you answer. Opening a fresh pane after
+reading the request and handing over that one is the expected workflow. What
+is checked at answer time is that the target exists, sits inside `--scope`,
+and is not the server's own pane.
+
+A request can be answered through three channels, whichever comes first — the
+agent is in none of them, so it cannot answer its own request:
 
 1. **Elicitation** — used automatically when the MCP client supports it. The
    question appears in the client's own UI (Claude Code shows a prompt).
 2. **The CLI** — from any shell, including over SSH:
 
    ```bash
-   tmux-mcp requests                  # what is pending, with the candidates
+   tmux-mcp requests                  # what is pending, listing panes live
    tmux-mcp grant r-8f3k2 %3          # assign pane %3
    tmux-mcp deny r-8f3k2 "not now"
    ```
+
+   `requests` lists the panes assignable *now*, so a pane you just opened
+   appears without the agent having to ask again.
 
 3. **An assign hook** — your own script, for any other way of asking.
 
@@ -126,11 +135,13 @@ Unanswered requests stay open for 30 minutes; `request-pane` returns
 The hook is spawned once per request. It receives the request as JSON on stdin
 (`id`, `reason`, `kind`, `candidates[].id`, `candidates[].label`,
 `grantCommand`) plus `TMUX_MCP_REQUEST_ID`, `TMUX_MCP_REASON`,
-`TMUX_MCP_KIND` and `TMUX_MCP_REQUESTS_DIR` in the environment.
+`TMUX_MCP_KIND` and `TMUX_MCP_REQUESTS_DIR` in the environment. The candidates
+are a snapshot for display; the hook may name any pane that exists when it
+answers.
 
 | First line of stdout | Meaning |
 |------|---------|
-| a candidate id (`%3`, `@2`) | assign that target |
+| a pane or window id (`%3`, `@2`) | assign that target; it need not be one of the candidates it was handed |
 | `deny` or `deny: <reason>` | refuse; the reason is forwarded to the agent |
 | empty, exit 0 | notification only; the answer arrives via the CLI |
 | anything else, or exit ≠ 0 | logged and ignored; the request stays pending |

@@ -77,8 +77,14 @@ node build/index.js deny  <request-id> "not now" --requests-dir=test-configs/req
 `tmux-mcp requests`, `tmux-mcp grant …`, `tmux-mcp deny …`.)
 
 When the client supports elicitation, Claude Code also shows the question
-directly. The channels race and the first answer wins, so you can leave the
-prompt open and still grant from the shell.
+directly: a dropdown of the panes that existed when the agent asked, plus an
+"other" choice with a free-text field for a pane you opened since. The
+channels race and the first answer wins, so you can leave the prompt open and
+still grant from the shell.
+
+`requests` lists what is assignable *now*, not what existed when the agent
+asked — so the usual flow works: read the request, open a pane, assign that
+one.
 
 Requests are written to `test-configs/requests/` instead of
 `~/.tmux-mcp/requests`, so a test run never touches your real one and you can
@@ -88,8 +94,11 @@ watch the files appear. That directory is gitignored.
 
 - Before any assignment, `list-sessions` returns `[]` and `capture-pane` on a
   real pane is denied. The agent cannot see what it was not given.
-- The request file in `test-configs/requests/` holds the candidate list. The
-  agent never receives it — only the pane it was assigned.
+- The request file in `test-configs/requests/` holds the candidate snapshot.
+  The agent never receives it — only the pane it was assigned.
+- Open a brand-new pane after the request and assign that one: it is accepted
+  even though it is not in the stored candidate list. A nonexistent id is
+  refused and the request stays open.
 - After an assignment, splitting that pane yields another usable pane; every
   other pane stays denied.
 - `create-session`, `create-window` and `move-window` are absent from the tool

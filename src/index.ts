@@ -10,7 +10,7 @@ import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
 import { addGrant, pruneGrants } from './grants.js';
-import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, expireRequests } from './requests.js';
+import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, expireRequests, getLastRefusal } from './requests.js';
 import type { Answer, PaneRequest } from './requests.js';
 import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
 import { spawnAssignHook } from './assign-hook.js';
@@ -113,9 +113,6 @@ const REQUEST_EXPIRY_MS = 30 * 60 * 1000;
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 30;
 // Channel teardown functions per request id, run once the request settles.
 const requestCleanups = new Map<string, Array<() => void>>();
-// The registry keeps settled requests, but the settle listener needs the
-// candidates to turn an answer into a grant, so snapshot them here.
-const pendingRequestSnapshots = new Map<string, PaneRequest>();
 
 function logToClient(level: 'info' | 'warning', message: string): void {
   void server.server.sendLoggingMessage({ level, data: `[human-assigned] ${message}` }).catch(() => { /* ignore */ });
@@ -896,7 +893,6 @@ if (humanAssigned) {
             };
           }
           request = createRequest(reason, requestKind, candidates);
-          pendingRequestSnapshots.set(request.id, request);
           await writeRequestFile(requestsDir, request);
           void notifyAttachedClients(request);
           logToClient('info', `pane request ${request.id}: ${reason}`);
@@ -905,12 +901,12 @@ if (humanAssigned) {
           const cleanups: Array<() => void> = [];
           if (clientSupportsElicitation(server.server)) {
             cleanups.push(startElicitation(server.server, created, answer => {
-              answerRequest(created.id, answer);
+              void answerRequest(created.id, answer);
             }, logToClient));
           }
           if (assignHookPath) {
             cleanups.push(spawnAssignHook(assignHookPath, created, requestsDir, answer => {
-              answerRequest(created.id, answer);
+              void answerRequest(created.id, answer);
             }, logToClient));
           }
           requestCleanups.set(created.id, cleanups);
@@ -1804,32 +1800,28 @@ async function main() {
 
     if (humanAssigned) {
       // A granted request becomes a grant, and its channels are torn down.
-      onRequestSettled((id: string, answer: Answer) => {
-        const snapshot = pendingRequestSnapshots.get(id);
-        if (answer.status === 'granted' && snapshot) {
-          const candidate = snapshot.candidates.find(c => c.id === answer.target);
-          if (candidate) {
-            addGrant({
-              kind: snapshot.kind,
-              id: candidate.id,
-              windowId: candidate.windowId,
-              sessionId: candidate.sessionId,
-            });
-            logToClient('info', `granted ${candidate.id} via ${answer.via}`);
-            try { server.sendResourceListChanged(); } catch { /* ignore */ }
-          }
+      onRequestSettled((id: string, answer: Answer, request: PaneRequest) => {
+        if (answer.status === 'granted' && answer.windowId && answer.sessionId) {
+          addGrant({
+            kind: request.kind,
+            id: answer.target,
+            windowId: answer.windowId,
+            sessionId: answer.sessionId,
+          });
+          logToClient('info', `assigned ${answer.target} via ${answer.via}`);
+          try { server.sendResourceListChanged(); } catch { /* ignore */ }
         }
-        pendingRequestSnapshots.delete(id);
         cleanupRequest(id);
       });
 
       // The watcher retries rejected answers, so warn only once per request.
       const warnedAnswers = new Set<string>();
-      const stopWatcher = startAnswerWatcher(requestsDir, (id, answer) => {
-        if (answerRequest(id, answer)) return true;
+      const stopWatcher = startAnswerWatcher(requestsDir, async (id, answer) => {
+        if (await answerRequest(id, answer)) return true;
         if (!warnedAnswers.has(id)) {
           warnedAnswers.add(id);
-          logToClient('warning', `ignored answer for ${id} (unknown request or invalid target)`);
+          const why = getLastRefusal();
+          logToClient('warning', `ignored answer for ${id}${why ? `: ${why}` : ' (unknown or already answered request)'}`);
         }
         return false;
       });
