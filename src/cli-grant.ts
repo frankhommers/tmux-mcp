@@ -16,7 +16,7 @@ import type { PaneRequest } from './requests.js';
  * want to hand over after reading the request. Filtering is done with the
  * scope recorded in the file, so this matches what the server will accept.
  */
-async function liveTargets(request: PaneRequest): Promise<Array<{ id: string; label: string }>> {
+export async function liveTargets(request: PaneRequest): Promise<Array<{ id: string; label: string }>> {
   const scope = request.scope ?? { mode: 'none', sessionIds: [], windowId: null, excludedPaneId: null };
   const panes = await listAllPanes();
   const targets: Array<{ id: string; label: string }> = [];
