@@ -9,6 +9,7 @@ import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getS
 import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
+import { isUiCliCommand, runUiCli, ensureDaemonRunning } from './cli-ui.js';
 import { addGrant, pruneGrants } from './grants.js';
 import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, expireRequests, getLastRefusal } from './requests.js';
 import type { Answer, PaneRequest } from './requests.js';
@@ -1744,6 +1745,15 @@ async function main() {
     const subcommand = process.argv[2];
     if (isGrantCliCommand(subcommand)) {
       process.exit(await runGrantCli(process.argv.slice(2)));
+    }
+    if (isUiCliCommand(subcommand)) {
+      process.exit(await runUiCli(process.argv.slice(2)));
+    }
+    // Belt and braces: a UI daemon must never auto-spawn another daemon.
+    // Without this, a wrong entry path turns spawning into a fork bomb.
+    if (process.env.TMUX_MCP_UI_CHILD === '1' && !isUiCliCommand(subcommand)) {
+      console.error('[tmux-mcp] refusing to run the MCP server inside a UI daemon process');
+      process.exit(1);
     }
 
     const { values } = parseArgs({
