@@ -4,8 +4,9 @@
 
 One local web UI, shared by every tmux-mcp server on the machine, where a
 human answers pane requests, manages tmux sessions, and peeks at pane
-contents. It replaces the per-client prompting (elicitation forms, macOS
-dialogs, tmux popups) with a single place that is always in the same spot.
+contents. It **replaces** in-client prompting: MCP elicitation is removed
+from the server entirely, so there is one place where requests are answered
+instead of a prompt whose shape depends on which client the agent runs in.
 
 It exists because prompting inside the agent's client does not fit how a
 human actually works: the prompt lists panes that existed when the agent
@@ -24,6 +25,11 @@ and the UI keeps working across agent restarts.
 
 ## Non-goals
 
+- MCP elicitation. It is deleted, not made optional: keeping a second asking
+  channel is what produced two prompts for one request, and its behaviour
+  varies per client (some auto-decline what they cannot render, which would
+  silently kill a request). The remaining channels are the UI, the
+  `tmux-mcp grant` CLI, and an optional assign hook.
 - Typing into panes. The terminal view is read-only (see Terminal view).
   A web page that can `send-keys` is a shell on localhost; that is a
   different security decision and not this one.
@@ -99,30 +105,36 @@ warning and falls back to the other channels.
   including panes no agent may touch. Assignment, however, stays inside the
   scope recorded in the request (see below).
 
-## Answer channels: one prompt, not three
+## Answer channels after removing elicitation
 
-Today every channel starts at once, so a configured hook produces both a
-dialog and an elicitation form. Precedence replaces that:
+Three ways to answer, none of which lives inside the agent's client:
 
-| Condition | Asking channel |
+| Channel | Role |
 |---|---|
-| `--assign-hook` set | the hook only |
-| else `--ui` set | elicitation in **`url` mode**: a link to `/r/<id>`; no form |
-| else | elicitation form (today's behaviour) |
+| The UI | the normal path: see the request, refresh the live list, Assign or Deny |
+| `tmux-mcp grant` / `deny` | headless and SSH; also the fallback when the daemon is not running |
+| assign hook | optional; mainly to *notify* you, but it may still answer by printing an id |
 
-The grant CLI and the UI always work regardless: they ask nothing, they
-watch. "Asking channel" only decides what interrupts the human.
+`src/elicit-channel.ts` and its tests are deleted, and the elicitation wiring
+disappears from `src/index.ts`. A client that advertises the elicitation
+capability simply never receives a request.
 
-Two related corrections to current behaviour:
+### Being told a request arrived
 
-- `decline` and `cancel` from the client both mean **"this channel did not
-  answer"**, leaving the request open. Only the explicit *Deny this request*
-  choice in the form, the UI's Deny button, `deny` from a hook, or
-  `tmux-mcp deny` denies. A client that auto-declines an elicitation it does
-  not support must not be able to kill a request.
-- When `url`-mode elicitation is used, the server calls
-  `createElicitationCompletionNotifier(elicitationId)` once the request is
-  answered, so the client can close its pending link.
+Nothing interrupts the agent's client any more, so notification has to carry
+that weight. On a new request:
+
+- the MCP server keeps its `tmux display-message` on every attached client
+  and its MCP log notification, both now including the UI URL for that
+  request;
+- the assign hook payload gains `uiUrl`, so `notify-only.sh` can put a
+  clickable link in the desktop notification;
+- the daemon itself notifies: `terminal-notifier` / `notify-send` when
+  available, and the browser's Notification API for any open tab, so an
+  already-open UI surfaces the request without being watched.
+
+None of these is required for correctness: an unnoticed request simply waits
+its 30 minutes, and `tmux-mcp requests` always shows what is pending.
 
 ## HTTP API
 
@@ -186,8 +198,8 @@ the UI cannot widen anyone's scope.
 ## Pages
 
 - `/` — the app. Two panels: pending requests, and the tmux tree.
-- `/r/<id>` — the same app, opened on one request. This is the URL handed to
-  `url`-mode elicitation, so the agent's client can link straight to it.
+- `/r/<id>` — the same app, opened on one request. This is the URL that goes
+  into notifications, so any of them lands on the right screen.
 
 A pending request shows the reason verbatim, its age, and the live target
 list with a refresh button; each target row has **Assign**, and the request
@@ -214,9 +226,9 @@ UI works offline and needs no vendored blob in git.
 Each milestone is independently useful and independently shippable.
 
 1. **Inbox** — daemon, discovery/auto-spawn, auth, requests endpoints, SSE,
-   the page, plus the MCP-side channel precedence and the `decline` fix.
-   At the end of this milestone the double-prompt problem is gone and a
-   pane opened after the request can be assigned from the browser.
+   the page, removal of elicitation, and the notification paths.
+   At the end of this milestone there is exactly one place to answer a
+   request, and a pane opened after the request can be assigned there.
 2. **Control panel** — the tmux tree and its mutations, clients detach and
    switch.
 3. **Terminal view** — `@xterm/xterm`, the content stream, the pane preview.
@@ -233,9 +245,10 @@ Each milestone is independently useful and independently shippable.
 - Targets: a pane created after the request shows up in `/targets`; a pane
   outside the request's scope does not.
 - tmux endpoints: against a throwaway session, as elsewhere in the suite.
-- Channel precedence: with a hook configured, no elicitation is sent; with
-  `--ui`, the elicitation is `mode: 'url'`; with neither, a form.
-- `decline`/`cancel` leave the request pending; explicit deny denies.
+- No elicitation is ever sent, even to a client that advertises the
+  capability — asserted against the real server over stdio.
+- Notifications: the hook payload carries `uiUrl`; the tmux message contains
+  the request URL.
 
 ## Files
 
@@ -246,15 +259,15 @@ Each milestone is independently useful and independently shippable.
 - `src/ui/events.ts` — SSE hub, requests-dir and control-mode sources
 - `src/ui/public/{index.html,app.css,app.js}` — the page
 - `src/cli-ui.ts` — the `ui` subcommand
-- `src/index.ts` — `--ui` flag, auto-spawn, channel precedence
-- `src/elicit-channel.ts` — `url` mode, `decline`/`cancel` semantics
+- `src/index.ts` — `--ui` flag, auto-spawn, elicitation wiring removed
+- `src/elicit-channel.ts`, `test/elicit-channel.test.mjs` — **deleted**
+- `src/assign-hook.ts` — `uiUrl` in the payload
 - `package.json` — `@xterm/xterm`
 - `README.md`, `test-configs/` — documentation and a config that uses the UI
 
-## Open question for the first milestone
+## Consequence to accept
 
-Whether Claude Code renders `url`-mode elicitation usefully (a clickable
-link) or ignores it. If it ignores it, the fallback is the form with a single
-"Open the control UI" instruction, or no elicitation at all when `--ui` is
-set. Settled with a throwaway probe in the first task, exactly like the
-elicitation-timeout question in the human-assigned work.
+Without elicitation there is no in-client path at all. Someone who wants
+tmux-mcp without a local web server answers with `tmux-mcp grant`, or wires
+an assign hook. That is a deliberate trade: one predictable place beats a
+prompt whose behaviour depends on the client.
