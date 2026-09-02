@@ -5,7 +5,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as tmux from "./tmux.js";
-import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId, ensureScopeResolved } from "./scope.js";
+import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId, ensureScopeResolved, initHumanAssigned, isHumanAssigned } from "./scope.js";
 import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 
@@ -34,6 +34,15 @@ const clientTimeoutSeconds: number = (() => {
   return Math.floor(n);
 })();
 const clientTimeoutIsDefault = clientTimeoutSeconds === CLIENT_TIMEOUT_DEFAULT;
+
+// Human-assigned mode. Peeked at module load (like clientTimeoutSeconds)
+// because tool registration and tool descriptions depend on it.
+const humanAssigned: boolean = (() => {
+  const argv = process.argv.slice(2);
+  if (argv.includes('--human-assigned')) return true;
+  const env = process.env.TMUX_MCP_HUMAN_ASSIGNED;
+  return env === '1' || env === 'true';
+})();
 const clientTimeoutDisabled = clientTimeoutSeconds <= 0;
 
 function getMaxBlockingSeconds(): number {
@@ -1566,7 +1575,10 @@ async function main() {
         'scope': { type: 'string' },
         'include-current-pane': { type: 'boolean', default: false },
         'default-split-direction': { type: 'string' },
-        'client-timeout-seconds': { type: 'string' }
+        'client-timeout-seconds': { type: 'string' },
+        'human-assigned': { type: 'boolean', default: false },
+        'assign-hook': { type: 'string' },
+        'requests-dir': { type: 'string' }
       }
     });
 
@@ -1579,6 +1591,9 @@ async function main() {
 
     // Initialize exclude-self (excludes the agent's own pane by default)
     initExcludeSelf(values['include-current-pane'] as boolean);
+
+    // Human-assigned mode: start with no access, grow only through grants.
+    initHumanAssigned(humanAssigned);
 
     // Initialize default split direction
     const splitDir = values['default-split-direction'] ?? process.env.TMUX_MCP_DEFAULT_SPLIT_DIRECTION;

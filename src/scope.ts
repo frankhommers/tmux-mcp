@@ -1,4 +1,5 @@
 import { executeTmux } from "./tmux.js";
+import { isPaneGranted, isWindowGranted, isSessionGranted } from "./grants.js";
 
 type ScopeMode = 'none' | 'session' | 'window';
 
@@ -11,6 +12,19 @@ let allowedWindowId: string | null = null;
 // interacting with its own pane. Use --include-current-pane to disable.
 let excludedPaneId: string | null = null;
 let excludeSelf = true;
+
+// Human-assigned mode: the allowed set starts empty and only grows through
+// explicit human assignment (see grants.ts). It intersects with the static
+// scope above — a resource must pass both checks.
+let humanAssigned = false;
+
+export function initHumanAssigned(enabled: boolean): void {
+  humanAssigned = enabled;
+}
+
+export function isHumanAssigned(): boolean {
+  return humanAssigned;
+}
 
 let scopeResolved = false;
 
@@ -98,6 +112,31 @@ export function isScopeActive(): boolean {
  * and session membership for sessions.
  */
 export async function isInScope(id: string, type: 'pane' | 'window' | 'session'): Promise<boolean> {
+  if (!(await isInStaticScope(id, type))) return false;
+  if (!humanAssigned) return true;
+  return isInGrantedScope(id, type);
+}
+
+/**
+ * Grant check for human-assigned mode. Runs only after the static scope has
+ * already accepted the resource.
+ */
+async function isInGrantedScope(id: string, type: 'pane' | 'window' | 'session'): Promise<boolean> {
+  try {
+    if (type === 'session') return isSessionGranted(id);
+    if (type === 'window') return isWindowGranted(id);
+    // A pane is allowed by its own grant or by a grant on its window. Only
+    // resolve the window when the cheap check did not already succeed.
+    // An empty window id can never match a granted window.
+    if (isPaneGranted(id, '')) return true;
+    const windowId = await executeTmux(['display-message', '-p', '-t', id, '#{window_id}']);
+    return isPaneGranted(id, windowId);
+  } catch {
+    return false;
+  }
+}
+
+async function isInStaticScope(id: string, type: 'pane' | 'window' | 'session'): Promise<boolean> {
   if (scopeMode === 'none') return true;
 
   await ensureScopeResolved();
@@ -159,6 +198,11 @@ export function getScopeMode(): ScopeMode {
  */
 export function getAllowedSessionIds(): ReadonlySet<string> {
   return allowedSessionIds;
+}
+
+/** The window id the static scope is anchored on, or null. */
+export function getAllowedWindowId(): string | null {
+  return allowedWindowId;
 }
 
 /**

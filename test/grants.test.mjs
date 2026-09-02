@@ -62,3 +62,27 @@ test('pruneGrants drops resources that no longer exist', () => {
   assert.equal(isPaneGranted('%4', '@1'), false);
   assert.equal(isWindowGranted('@2'), false);
 });
+
+import { initScope, initHumanAssigned, isHumanAssigned, isInScope } from '../build/scope.js';
+
+test('human-assigned denies everything until something is granted', async () => {
+  resetGrants();
+  initScope('none');
+  initHumanAssigned(true);
+  assert.equal(isHumanAssigned(), true);
+  // No tmux call needed: a window id short-circuits on the grant check.
+  assert.equal(await isInScope('@1', 'window'), false);
+  assert.equal(await isInScope('$0', 'session'), false);
+});
+
+test('human-assigned allows a granted window and its session', async () => {
+  resetGrants();
+  initScope('none');
+  initHumanAssigned(true);
+  addGrant({ kind: 'window', id: '@2', windowId: '@2', sessionId: '$0' });
+  assert.equal(await isInScope('@2', 'window'), true);
+  assert.equal(await isInScope('@3', 'window'), false);
+  assert.equal(await isInScope('$0', 'session'), true);
+  assert.equal(await isInScope('$1', 'session'), false);
+  initHumanAssigned(false);
+});
