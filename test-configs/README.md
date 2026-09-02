@@ -1,8 +1,8 @@
 # Test configurations
 
-`mcp.json` points at this checkout's own build, so you can try the
+`.mcp.json` points at this checkout's own build, so you can try the
 human-assigned mode against local changes. JSON has no comments and not every
-client accepts JSONC, so `mcp.json` is strict JSON and the commentary lives
+client accepts JSONC, so `.mcp.json` is strict JSON and the commentary lives
 here.
 
 ## Before you start
@@ -13,14 +13,18 @@ npm run build            # mcp.json runs build/index.js, which is gitignored
 
 ## Using it with Claude Code
 
+Claude Code loads `.mcp.json` from the directory you start in, so no flags are
+needed:
+
 ```bash
-claude --mcp-config test-configs/mcp.json
+cd test-configs
+claude
 ```
 
-Or copy it in as the project config, which Claude Code loads automatically:
+The paths inside are absolute, so starting from anywhere else works too:
 
 ```bash
-cp test-configs/mcp.json .mcp.json
+claude --mcp-config test-configs/.mcp.json
 ```
 
 All five servers are in one file. Claude Code starts every server it finds, so
@@ -47,6 +51,7 @@ is gitignored.
 Ask the agent to call `request-pane`. Then, from any shell:
 
 ```bash
+cd /Users/frankhommers/Repos/tmux-mcp
 node build/index.js requests --requests-dir=test-configs/requests
 node build/index.js grant <request-id> %3 --requests-dir=test-configs/requests
 node build/index.js deny  <request-id> "not now" --requests-dir=test-configs/requests
