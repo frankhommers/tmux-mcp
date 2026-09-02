@@ -1409,3 +1409,61 @@ export async function waitForPaneContentGone(
   }
   return { gone: false };
 }
+
+export interface TmuxPaneInventory {
+  paneId: string;
+  windowId: string;
+  sessionId: string;
+  sessionName: string;
+  windowName: string;
+  paneIndex: string;
+  currentCommand: string;
+  title: string;
+}
+
+/**
+ * Field separator for the inventory format.
+ *
+ * NOT a tab: tmux escapes control characters in `-F` output when the
+ * environment lacks a UTF-8 locale (a tab comes back as '_'), which silently
+ * collapses every row into one field. This printable sequence survives, and
+ * the title absorbs any occurrence of it in the last field.
+ */
+const INVENTORY_SEP = '|~|';
+
+/**
+ * Inventory every pane on the tmux server in one call.
+ *
+ * ':' cannot be used as a separator here (the older helpers do, and break on
+ * titles containing it), so fields are separated by INVENTORY_SEP.
+ */
+export async function listAllPanes(): Promise<TmuxPaneInventory[]> {
+  const format = [
+    '#{pane_id}', '#{window_id}', '#{session_id}', '#{session_name}',
+    '#{window_name}', '#{pane_index}', '#{pane_current_command}', '#{pane_title}',
+  ].join(INVENTORY_SEP);
+  const output = await executeTmux(['list-panes', '-a', '-F', format]);
+  if (!output) return [];
+  return output.split('\n').flatMap(line => {
+    const f = line.split(INVENTORY_SEP);
+    if (f.length < 8) return [];
+    return [{
+      paneId: f[0],
+      windowId: f[1],
+      sessionId: f[2],
+      sessionName: f[3],
+      windowName: f[4],
+      paneIndex: f[5],
+      currentCommand: f[6],
+      // A title containing the separator would otherwise be truncated.
+      title: f.slice(7).join(INVENTORY_SEP),
+    }];
+  });
+}
+
+/** Every window id on the tmux server. Used to prune stale grants. */
+export async function listAllWindowIds(): Promise<string[]> {
+  const output = await executeTmux(['list-windows', '-a', '-F', '#{window_id}']);
+  if (!output) return [];
+  return output.split('\n').filter(Boolean);
+}
