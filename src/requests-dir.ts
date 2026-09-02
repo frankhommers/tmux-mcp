@@ -3,8 +3,24 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Answer, PaneRequest } from './requests.js';
+import { isProcessAlive } from './process-alive.js';
 
 const POLL_INTERVAL_MS = 1000;
+
+/** Matches REQUEST_EXPIRY_MS in the MCP server. */
+const REQUEST_MAX_AGE_MS = 30 * 60 * 1000;
+
+/**
+ * A request nobody is waiting for any more: its server died, or it outlived
+ * the window in which that server would still accept an answer. Answering
+ * one is a no-op, so it must not clutter the inbox.
+ */
+export function isRequestStale(request: PaneRequest, now: number = Date.now()): boolean {
+  if (now - request.createdAt > REQUEST_MAX_AGE_MS) return true;
+  // Older request files predate the pid field; age is all we can judge them by.
+  if (typeof request.pid !== 'number') return false;
+  return !isProcessAlive(request.pid);
+}
 
 export function resolveRequestsDir(cliValue?: string): string {
   return cliValue
@@ -29,6 +45,10 @@ export async function readRequestFile(dir: string, id: string): Promise<PaneRequ
   }
 }
 
+/**
+ * Live pending requests. Stale ones are deleted as they are encountered, so
+ * an abandoned request file cannot linger in the inbox forever.
+ */
 export async function listRequestFiles(dir: string): Promise<PaneRequest[]> {
   let entries: string[];
   try {
@@ -40,7 +60,12 @@ export async function listRequestFiles(dir: string): Promise<PaneRequest[]> {
   for (const entry of entries) {
     if (!entry.endsWith('.json')) continue;
     const request = await readRequestFile(dir, entry.slice(0, -'.json'.length));
-    if (request) requests.push(request);
+    if (!request) continue;
+    if (isRequestStale(request)) {
+      await removeRequestFiles(dir, request.id);
+      continue;
+    }
+    requests.push(request);
   }
   return requests;
 }

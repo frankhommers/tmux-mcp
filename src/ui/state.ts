@@ -2,6 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { open, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isProcessAlive } from '../process-alive.js';
+
+export { isProcessAlive };
 
 /** What a running daemon advertises to anything that wants to reach it. */
 export interface UiState {
@@ -52,16 +55,7 @@ export async function clearUiState(stateDir: string): Promise<void> {
   await rm(stateFilePath(stateDir), { force: true });
 }
 
-export function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error: any) {
-    // EPERM means it exists but belongs to someone else.
-    return error?.code === 'EPERM';
-  }
-}
+
 
 export function newToken(): string {
   return randomBytes(16).toString('hex');

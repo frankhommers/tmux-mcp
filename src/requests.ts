@@ -62,6 +62,8 @@ export interface PaneRequest {
   id: string;
   reason: string;
   kind: GrantKind;
+  /** The MCP server that asked. A dead pid means the request is orphaned. */
+  pid: number;
   /** Advisory snapshot of what existed when the agent asked. */
   candidates: Candidate[];
   scope: RequestScope;
@@ -190,6 +192,7 @@ export function createRequest(reason: string, kind: GrantKind, candidates: Candi
     id: `r-${randomBytes(4).toString('hex')}`,
     reason,
     kind,
+    pid: process.pid,
     candidates,
     scope: {
       mode: getScopeMode(),

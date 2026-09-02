@@ -123,3 +123,26 @@ test('an answer the server rejects is retried until it is accepted', async () =>
 
   assert.ok(attempts > 1);
 });
+
+test('a request whose server has died is dropped from the inbox', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tmux-mcp-req-'));
+  const { readdir } = await import('node:fs/promises');
+
+  await writeRequestFile(dir, { ...REQUEST, id: 'r-live', pid: process.pid, createdAt: Date.now() });
+  await writeRequestFile(dir, { ...REQUEST, id: 'r-orphan', pid: 2_147_483_646, createdAt: Date.now() });
+  await writeRequestFile(dir, { ...REQUEST, id: 'r-old', pid: process.pid, createdAt: Date.now() - 31 * 60 * 1000 });
+
+  const live = await listRequestFiles(dir);
+  assert.deepEqual(live.map(r => r.id), ['r-live']);
+
+  // The stale ones are removed, not merely hidden.
+  const left = await readdir(dir);
+  assert.deepEqual(left.sort(), ['r-live.json']);
+});
+
+test('a request file without a pid is judged on age alone', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tmux-mcp-req-'));
+  const { pid, ...withoutPid } = { ...REQUEST, pid: 1 };
+  await writeRequestFile(dir, { ...withoutPid, id: 'r-legacy', createdAt: Date.now() });
+  assert.deepEqual((await listRequestFiles(dir)).map(r => r.id), ['r-legacy']);
+});
