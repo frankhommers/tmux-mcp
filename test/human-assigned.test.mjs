@@ -152,3 +152,33 @@ test('a denial is reported to the agent with its reason', async () => {
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });
+
+test('splitting a granted pane grants the child pane', async () => {
+  const sessionName = `tmux-mcp-ha-${process.pid}-${randomUUID()}`;
+  const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+  const { client, transport, requestsDir } = await startHumanAssignedServer();
+
+  try {
+    const pendingCall = client.callTool({
+      name: 'request-pane',
+      arguments: { reason: 'need a workspace', timeoutSeconds: 20 },
+    });
+    const requestId = await waitForRequestId(requestsDir);
+    await writeFile(join(requestsDir, `${requestId}.grant`), paneId, { mode: 0o600 });
+    await pendingCall;
+
+    const split = await client.callTool({
+      name: 'split-pane',
+      arguments: { paneId, direction: 'vertical' },
+    });
+    assert.ok(!split.isError);
+    const childId = resultText(split).match(/"id": "(%\d+)"/)[1];
+
+    // The child is usable without a second request.
+    const capture = await client.callTool({ name: 'capture-pane', arguments: { paneId: childId, lines: '5' } });
+    assert.ok(!capture.isError);
+  } finally {
+    await transport.close();
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});

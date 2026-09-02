@@ -185,3 +185,49 @@ test('discovers execute-command-wait-for-content with focused guidance and schem
     await transport.close();
   }
 });
+
+test('human-assigned mode registers request-pane and drops creation tools', async () => {
+  const client = new Client({ name: 'human-assigned-registration', version: '1.0.0' });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ['build/index.js', '--human-assigned'],
+    cwd: process.cwd(),
+    stderr: 'pipe',
+  });
+  try {
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    const names = tools.map(tool => tool.name);
+
+    assert.ok(names.includes('request-pane'));
+    assert.ok(!names.includes('create-session'));
+    assert.ok(!names.includes('create-window'));
+    assert.ok(!names.includes('move-window'));
+
+    const requestTool = tools.find(tool => tool.name === 'request-pane');
+    assert.deepEqual(Object.keys(requestTool.inputSchema.properties ?? {}).sort(), [
+      'reason', 'kind', 'timeoutSeconds', 'requestId',
+    ].sort());
+    assert.deepEqual([...(requestTool.inputSchema.required ?? [])], ['reason']);
+    assert.match(requestTool.description ?? '', /start with access to nothing/i);
+  } finally {
+    await transport.close();
+  }
+});
+
+test('without the flag request-pane is not registered', async () => {
+  const client = new Client({ name: 'default-registration', version: '1.0.0' });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ['build/index.js'],
+    cwd: process.cwd(),
+    stderr: 'pipe',
+  });
+  try {
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    assert.ok(!tools.map(tool => tool.name).includes('request-pane'));
+  } finally {
+    await transport.close();
+  }
+});

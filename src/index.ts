@@ -620,6 +620,7 @@ server.tool(
       // is the only pane in the window (otherwise the agent has no pane to split).
       await assertInScope(paneId, 'pane');
       const newPane = await tmux.splitPane(paneId, direction || defaultSplitDirection, size);
+      if (newPane) await autoGrantNewPane(newPane.id);
       return {
         content: [{
           type: "text",
@@ -675,6 +676,7 @@ server.tool(
 
       const newPane = await tmux.splitPane(paneToSplit, direction || defaultSplitDirection, size);
       if (newPane) {
+        await autoGrantNewPane(newPane.id);
         return {
           content: [{
             type: "text",
@@ -785,6 +787,7 @@ server.tool(
         const winner = candidates[0];
         const newPane = await tmux.splitPane(winner.paneId, winner.direction);
         if (newPane) {
+          await autoGrantNewPane(newPane.id);
           return {
             content: [{
               type: "text",
@@ -803,11 +806,13 @@ server.tool(
 
       // No splittable pane found (or split returned null). Try new-window
       // fallback unless scope forbids it.
-      if (getScopeMode() === 'window') {
+      if (getScopeMode() === 'window' || isHumanAssigned()) {
         return {
           content: [{
             type: "text",
-            text: `No pane in window ${targetWindowId} has enough room to split (min ${NEW_PANE_SMART_MIN_WIDTH}x${NEW_PANE_SMART_MIN_HEIGHT}), and scope=window blocks creating new windows. Resize the window or use a different scope.`
+            text: isHumanAssigned()
+              ? `No assigned pane has enough room to split (min ${NEW_PANE_SMART_MIN_WIDTH}x${NEW_PANE_SMART_MIN_HEIGHT}). Ask a human for another pane with request-pane.`
+              : `No pane in window ${targetWindowId} has enough room to split (min ${NEW_PANE_SMART_MIN_WIDTH}x${NEW_PANE_SMART_MIN_HEIGHT}), and scope=window blocks creating new windows. Resize the window or use a different scope.`
           }],
           isError: true
         };
@@ -1715,6 +1720,13 @@ server.tool(
  * - window scope: disable create-session, create-window, kill-window, move-window
  */
 function disableToolsByScope(): void {
+  if (humanAssigned) {
+    // Nothing may be created or moved outside what a human assigned.
+    createSessionTool.disable();
+    createWindowTool.disable();
+    moveWindowTool.disable();
+  }
+
   const mode = getScopeMode();
   if (mode === 'none') return;
 
@@ -1835,6 +1847,7 @@ async function main() {
 
     const watcher = new ResourceChangeWatcher({
       onListChanged: () => {
+        if (humanAssigned) void pruneStaleGrants();
         try { server.sendResourceListChanged(); } catch { /* ignore */ }
       },
       log: (level, msg) => {
