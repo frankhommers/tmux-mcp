@@ -10,12 +10,12 @@ import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
 import { isUiCliCommand, runUiCli, ensureDaemonRunning } from './cli-ui.js';
+import { resolveStateDir, type UiState } from './ui/state.js';
 import { addGrant, pruneGrants } from './grants.js';
 import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, expireRequests, getLastRefusal } from './requests.js';
 import type { Answer, PaneRequest } from './requests.js';
 import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
 import { spawnAssignHook } from './assign-hook.js';
-import { clientSupportsElicitation, startElicitation } from './elicit-channel.js';
 
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
@@ -42,6 +42,15 @@ const clientTimeoutSeconds: number = (() => {
   return Math.floor(n);
 })();
 const clientTimeoutIsDefault = clientTimeoutSeconds === CLIENT_TIMEOUT_DEFAULT;
+
+// Whether to run the local control UI, peeked at module load like the flags
+// above so tool descriptions and registration can depend on it.
+const uiEnabled: boolean = (() => {
+  const argv = process.argv.slice(2);
+  if (argv.includes('--ui')) return true;
+  const env = process.env.TMUX_MCP_UI;
+  return env === '1' || env === 'true';
+})();
 
 // Human-assigned mode. Peeked at module load (like clientTimeoutSeconds)
 // because tool registration and tool descriptions depend on it.
@@ -110,10 +119,17 @@ const server = new McpServer({
 // Resolved in main(); the request-pane tool only runs after connect().
 let requestsDir = '';
 let assignHookPath: string | undefined;
+let uiState: UiState | null = null;
 const REQUEST_EXPIRY_MS = 30 * 60 * 1000;
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 30;
 // Channel teardown functions per request id, run once the request settles.
 const requestCleanups = new Map<string, Array<() => void>>();
+
+/** Deep link to one request in the control UI, when it is running. */
+function requestUrl(requestId: string): string | undefined {
+  if (!uiState) return undefined;
+  return `http://127.0.0.1:${uiState.port}/r/${requestId}?t=${uiState.token}`;
+}
 
 function logToClient(level: 'info' | 'warning', message: string): void {
   void server.server.sendLoggingMessage({ level, data: `[human-assigned] ${message}` }).catch(() => { /* ignore */ });
@@ -121,10 +137,11 @@ function logToClient(level: 'info' | 'warning', message: string): void {
 
 /** Best-effort human-visible ping on every attached tmux client. */
 async function notifyAttachedClients(request: PaneRequest): Promise<void> {
+  const how = requestUrl(request.id) ?? `tmux-mcp grant ${request.id} <target>`;
   try {
     await tmux.executeTmux([
       'display-message', '-a',
-      `tmux-mcp: agent requests a ${request.kind} (${request.reason}) - tmux-mcp grant ${request.id} <target>`,
+      `tmux-mcp: agent requests a ${request.kind} (${request.reason}) - ${how}`,
     ]);
   } catch {
     // No tmux server or no attached client: the other channels still work.
@@ -896,19 +913,15 @@ if (humanAssigned) {
           request = createRequest(reason, requestKind, candidates);
           await writeRequestFile(requestsDir, request);
           void notifyAttachedClients(request);
-          logToClient('info', `pane request ${request.id}: ${reason}`);
+          const url = requestUrl(request.id);
+          logToClient('info', `pane request ${request.id}: ${reason}${url ? ` - ${url}` : ''}`);
 
           const created = request;
           const cleanups: Array<() => void> = [];
-          if (clientSupportsElicitation(server.server)) {
-            cleanups.push(startElicitation(server.server, created, answer => {
-              void answerRequest(created.id, answer);
-            }, logToClient));
-          }
           if (assignHookPath) {
             cleanups.push(spawnAssignHook(assignHookPath, created, requestsDir, answer => {
               void answerRequest(created.id, answer);
-            }, logToClient));
+            }, logToClient, requestUrl(created.id)));
           }
           requestCleanups.set(created.id, cleanups);
         }
@@ -1764,7 +1777,9 @@ async function main() {
         'client-timeout-seconds': { type: 'string' },
         'human-assigned': { type: 'boolean', default: false },
         'assign-hook': { type: 'string' },
-        'requests-dir': { type: 'string' }
+        'requests-dir': { type: 'string' },
+        'ui': { type: 'boolean', default: false },
+        'state-dir': { type: 'string' }
       }
     });
 
@@ -1782,6 +1797,15 @@ async function main() {
     initHumanAssigned(humanAssigned);
     requestsDir = resolveRequestsDir(values['requests-dir'] as string | undefined);
     assignHookPath = (values['assign-hook'] as string | undefined) ?? process.env.TMUX_MCP_ASSIGN_HOOK;
+
+    if (humanAssigned && uiEnabled) {
+      const stateDir = resolveStateDir(values['state-dir'] as string | undefined);
+      // Never fatal: without the UI, `tmux-mcp grant` still answers requests.
+      uiState = await ensureDaemonRunning(stateDir, requestsDir);
+      if (!uiState) {
+        console.error('[tmux-mcp] could not start the control UI; use `tmux-mcp grant` instead');
+      }
+    }
 
     // Initialize default split direction
     const splitDir = values['default-split-direction'] ?? process.env.TMUX_MCP_DEFAULT_SPLIT_DIRECTION;

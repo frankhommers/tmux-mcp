@@ -27,8 +27,12 @@ test('listAllPanes reports ids, names and current command', async () => {
 import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+const execFileAsync = promisify(execFile);
 
 function resultText(result) {
   assert.equal(result.content[0]?.type, 'text');
@@ -183,7 +187,7 @@ test('splitting a granted pane grants the child pane', async () => {
   }
 });
 
-test('a client that supports elicitation is asked directly', async () => {
+test('no elicitation is sent, even to a client that supports it', async () => {
   const { ElicitRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
   const sessionName = `tmux-mcp-ha-${process.pid}-${randomUUID()}`;
   const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
@@ -208,89 +212,47 @@ test('a client that supports elicitation is asked directly', async () => {
 
   try {
     await client.connect(transport);
-    const result = await client.callTool({
-      name: 'request-pane',
-      arguments: { reason: 'run the linter', timeoutSeconds: 15 },
-    });
-
-    assert.ok(!result.isError);
-    assert.match(resultText(result), /^Status: granted$/m);
-    assert.match(resultText(result), /^Assigned via: elicitation$/m);
-    assert.ok(resultText(result).includes(`Pane: ${paneId}`));
-
-    // The human saw the reason and got the pane as a choice; the agent never
-    // received the candidate list itself.
-    assert.equal(seen.length, 1);
-    assert.match(seen[0].message, /run the linter/);
-    assert.ok(seen[0].requestedSchema.properties.target.enum.includes(paneId));
-    assert.ok(seen[0].requestedSchema.properties.target.enum.includes('deny'));
-  } finally {
-    await transport.close();
-    await executeTmux(['kill-session', '-t', sessionName]);
-  }
-});
-
-test('a pane opened after the request was made can still be assigned', async () => {
-  const sessionName = `tmux-mcp-ha-${process.pid}-${randomUUID()}`;
-  await executeTmux(['new-session', '-d', '-s', sessionName]);
-  const { client, transport, requestsDir } = await startHumanAssignedServer();
-
-  try {
-    const pendingCall = client.callTool({
-      name: 'request-pane',
-      arguments: { reason: 'need a fresh workspace', timeoutSeconds: 25 },
-    });
-    const requestId = await waitForRequestId(requestsDir);
-    const request = JSON.parse(await readFile(join(requestsDir, `${requestId}.json`), 'utf8'));
-
-    // The human reads the request, then opens the pane they want to hand over.
-    const lateWindow = await executeTmux([
-      'new-window', '-d', '-t', sessionName, '-P', '-F', '#{window_id}',
-    ]);
-    const latePane = await executeTmux(['list-panes', '-t', lateWindow, '-F', '#{pane_id}']);
-    assert.ok(!request.candidates.some(c => c.id === latePane));
-
-    await writeFile(join(requestsDir, `${requestId}.grant`), latePane, { mode: 0o600 });
-
-    const granted = await pendingCall;
-    assert.ok(!granted.isError);
-    assert.match(resultText(granted), /^Status: granted$/m);
-    assert.ok(resultText(granted).includes(`Pane: ${latePane}`));
-
-    const capture = await client.callTool({ name: 'capture-pane', arguments: { paneId: latePane, lines: '5' } });
-    assert.ok(!capture.isError);
-  } finally {
-    await transport.close();
-    await executeTmux(['kill-session', '-t', sessionName]);
-  }
-});
-
-test('a pane that does not exist is refused and the request stays open', async () => {
-  const sessionName = `tmux-mcp-ha-${process.pid}-${randomUUID()}`;
-  const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
-  const { client, transport, requestsDir } = await startHumanAssignedServer();
-
-  try {
     const first = await client.callTool({
       name: 'request-pane',
-      arguments: { reason: 'typo test', timeoutSeconds: 2 },
+      arguments: { reason: 'run the linter', timeoutSeconds: 2 },
     });
-    const requestId = resultText(first).match(/Request ID: (r-[a-z0-9]+)/)[1];
-
-    // A typo: no such pane. The request must survive it.
-    await writeFile(join(requestsDir, `${requestId}.grant`), '%999999', { mode: 0o600 });
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
-    // A corrected answer still lands.
-    await writeFile(join(requestsDir, `${requestId}.grant`), paneId, { mode: 0o600 });
-    const polled = await client.callTool({
-      name: 'request-pane',
-      arguments: { reason: 'typo test', requestId, timeoutSeconds: 10 },
-    });
-    assert.match(resultText(polled), /^Status: granted$/m);
-    assert.ok(resultText(polled).includes(`Pane: ${paneId}`));
+    // The request must wait for a human, not be answered by the client.
+    assert.match(resultText(first), /^Status: pending$/m);
+    assert.equal(seen.length, 0);
   } finally {
     await transport.close();
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});
+
+test('--ui starts a daemon and puts its request URL in the log notification', async () => {
+  const { LoggingMessageNotificationSchema } = await import('@modelcontextprotocol/sdk/types.js');
+  const sessionName = `tmux-mcp-ha-${process.pid}-${randomUUID()}`;
+  await executeTmux(['new-session', '-d', '-s', sessionName]);
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-uiflag-'));
+  const requestsDir = join(stateDir, 'requests');
+
+  const client = new Client({ name: 'ui-flag-test', version: '1.0.0' }, { capabilities: { logging: {} } });
+  const logs = [];
+  client.setNotificationHandler(LoggingMessageNotificationSchema, note => { logs.push(String(note.params.data)); });
+
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ['build/index.js', '--human-assigned', '--ui', `--requests-dir=${requestsDir}`, `--state-dir=${stateDir}`],
+    cwd: process.cwd(),
+    stderr: 'pipe',
+  });
+
+  try {
+    await client.connect(transport);
+    await client.callTool({ name: 'request-pane', arguments: { reason: 'look at the UI', timeoutSeconds: 2 } });
+    assert.ok(
+      logs.some(line => /http:\/\/127\.0\.0\.1:\d+\/r\/r-[a-z0-9]+/.test(line)),
+      `expected a request URL in the log notifications, got: ${JSON.stringify(logs)}`
+    );
+  } finally {
+    await transport.close();
+    await execFileAsync(process.execPath, ['build/index.js', 'ui', '--stop', `--state-dir=${stateDir}`], { cwd: process.cwd() });
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });

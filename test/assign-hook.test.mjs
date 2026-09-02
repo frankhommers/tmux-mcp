@@ -108,3 +108,21 @@ test('shipped example hooks are executable and follow the contract', async () =>
   });
   assert.equal(answer, null);
 });
+
+test('the hook payload carries the UI url when one is given', async () => {
+  const path = await hookScript('payload=$(cat); echo "$payload" | grep -q "http://127.0.0.1:7676/r/r-abc123" && echo "%3"');
+  const answer = await new Promise(resolve => {
+    const kill = spawnAssignHook(path, REQUEST, '/tmp', a => resolve(a), () => {}, 'http://127.0.0.1:7676/r/r-abc123');
+    setTimeout(() => { kill(); resolve(null); }, 3000);
+  });
+  assert.deepEqual(answer, { status: 'granted', target: '%3', via: 'hook' });
+});
+
+test('the hook can read the UI url from the environment', async () => {
+  const path = await hookScript('test "$TMUX_MCP_UI_URL" = "http://127.0.0.1:7676/r/r-abc123" && echo "%5"');
+  const answer = await new Promise(resolve => {
+    const kill = spawnAssignHook(path, REQUEST, '/tmp', a => resolve(a), () => {}, 'http://127.0.0.1:7676/r/r-abc123');
+    setTimeout(() => { kill(); resolve(null); }, 3000);
+  });
+  assert.deepEqual(answer, { status: 'granted', target: '%5', via: 'hook' });
+});
