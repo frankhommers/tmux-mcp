@@ -5,13 +5,14 @@
   "type": "module",
   "main": "build/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run copy-ui",
     "test": "npm run build && node --test test/*.test.mjs",
     "prepare": "tsc",
     "start": "node build/index.js",
     "dev": "tsc -w",
     "check-release": "npm run build && npm publish --dry-run",
-    "release": "npm run build && npm publish"
+    "release": "npm run build && npm publish",
+    "copy-ui": "mkdir -p build/ui/public && cp src/ui/public/* build/ui/public/"
   },
   "bin": {
     "tmux-mcp": "build/index.js"
