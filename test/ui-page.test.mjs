@@ -47,8 +47,21 @@ test('the page assets are served with the right content types', async () => {
   });
 });
 
-test('the page is refused without a token', async () => {
+test('the app shell loads the way a browser loads it', async () => {
   await withDaemon(async daemon => {
-    assert.equal((await fetch(`${daemon.url}/`)).status, 401);
+    // A browser fetches the page with the token in the query string, but
+    // requests app.js and app.css as subresources: no header, no query.
+    // Requiring a token on those leaves a page that never runs its script.
+    assert.equal((await fetch(`${daemon.url}/?t=${daemon.token}`)).status, 200);
+    assert.equal((await fetch(`${daemon.url}/app.js`)).status, 200);
+    assert.equal((await fetch(`${daemon.url}/app.css`)).status, 200);
+    assert.equal((await fetch(`${daemon.url}/r/r-abc123`)).status, 200);
+  });
+});
+
+test('data still needs a token, even though the shell does not', async () => {
+  await withDaemon(async daemon => {
+    assert.equal((await fetch(`${daemon.url}/api/requests`)).status, 401);
+    assert.equal((await fetch(`${daemon.url}/events`)).status, 401);
   });
 });

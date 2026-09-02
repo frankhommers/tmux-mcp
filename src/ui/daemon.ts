@@ -78,6 +78,14 @@ function isLocalHost(host: string | undefined, port: number): boolean {
     || host === '127.0.0.1' || host === 'localhost';
 }
 
+/** Static app-shell paths, served without a token (they contain no data). */
+function isPublicPath(pathname: string): boolean {
+  return pathname === '/'
+    || pathname === '/app.css'
+    || pathname === '/app.js'
+    || pathname.startsWith('/r/');
+}
+
 function isAllowedOrigin(origin: string | undefined, port: number): boolean {
   if (!origin) return true; // Same-origin fetches and curl send none.
   return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
@@ -125,6 +133,20 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (url.pathname === '/api/health') {
       sendJson(res, 200, { ok: true, version, pid: process.pid });
       return;
+    }
+
+    // The app shell carries no data, and a browser sends neither the
+    // Authorization header nor the ?t= query on subresources: requiring a
+    // token here would 401 app.js and leave a dead page. Everything that
+    // exposes or changes state (/api, /events) still needs the token.
+    if (isPublicPath(url.pathname)) {
+      const match = matchRoute(req.method ?? 'GET', url.pathname);
+      if (match) {
+        const result = await match.route.handler({ url, params: match.params, body: undefined, req, res, options });
+        if (result === HANDLED) return;
+        sendJson(res, 200, result ?? { ok: true });
+        return;
+      }
     }
 
     const auth = req.headers.authorization;
