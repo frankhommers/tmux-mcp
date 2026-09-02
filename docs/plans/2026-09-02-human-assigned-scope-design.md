@@ -17,20 +17,28 @@ The agent (and this server) do not need to run inside tmux.
 - Protecting against agents that have another route to tmux (e.g. a free
   shell with `tmux send-keys`). The scope is only as strong as the agent's
   other tools. Documented, not solved.
-- A tmux popup channel. May be added later as another channel.
+- Building every notification/prompt channel into the server. Anything
+  beyond elicitation and the grant CLI goes through the assign hook.
 
 ## CLI
 
 ```
 --human-assigned              # or TMUX_MCP_HUMAN_ASSIGNED=1
---assign-channel auto|elicitation|grant   # default auto (TMUX_MCP_ASSIGN_CHANNEL)
+--assign-hook <path>          # optional script, see Assign hook (TMUX_MCP_ASSIGN_HOOK)
 --requests-dir <path>         # default ~/.tmux-mcp/requests (TMUX_MCP_REQUESTS_DIR)
 ```
 
-`auto` uses elicitation when the connected client advertised the
-`elicitation` capability at `initialize`, otherwise the grant channel.
-The grant channel is always active as a second path even when elicitation
-is used: a human may pre-grant or grant from a shell at any time.
+Three channels can answer a request; all race on the same pending record and
+the first answer wins:
+
+1. **Elicitation** — used automatically when the connected client advertised
+   the `elicitation` capability at `initialize`. Built in, because it runs
+   over the MCP transport and cannot be done from a script.
+2. **Grant CLI** — always active. A human may pre-grant or grant from any
+   shell at any time.
+3. **Assign hook** — only when `--assign-hook` is set. The user's own script
+   decides how the human is reached (tmux popup, OS dialog, chat message…)
+   and may answer directly or just notify.
 
 Subcommands on the same binary (`tmux-mcp <cmd>`), for the grant channel:
 
@@ -99,7 +107,7 @@ Flow:
      `tmux-mcp: agent requests a pane (<reason>) — run: tmux-mcp grant <id> <target>`
    - MCP `notifications/message` (level `notice`)
    - stderr line
-4. Channel:
+4. Channels (all started together, first answer wins, others are cancelled):
    - **elicitation**: `server.server.elicitInput({ message, requestedSchema })`
      with `target` as an enum of candidate ids (enum labels carry the
      human-readable line) plus `"deny"`. `accept` → grant; `decline`/`cancel`
@@ -108,7 +116,9 @@ Flow:
      `<id>.grant` / `<id>.deny` written by the CLI. A grant file contains the
      target id; the server validates it against the candidate list (so a
      typo or an out-of-scope id is refused and the request stays pending).
-   Both channels race with the same pending record; first answer wins.
+   - **hook**: spawn the configured script (see Assign hook). Its stdout, if
+     it names a candidate or `deny`, is the answer; otherwise it was a
+     notification only.
 5. If answered within `timeoutSeconds` the tool returns
    `{ status: "granted", pane: {...} }` (or `{ status: "denied", reason }`).
    Otherwise it returns `{ status: "pending", requestId }`. The request keeps
@@ -120,6 +130,55 @@ Flow:
 Pending requests expire after 30 minutes (file removed, elicitation aborted).
 Requests belonging to a dead server (pid gone) are shown as stale by
 `tmux-mcp requests` and can be cleaned with `tmux-mcp requests --prune`.
+
+## Assign hook
+
+`--assign-hook <path>` names an executable the server spawns once per new
+request. It is the extension point for any way of reaching a human that is
+not elicitation.
+
+Input, on stdin, one JSON object:
+
+```json
+{
+  "id": "r-8f3k2",
+  "reason": "run the test suite",
+  "kind": "pane",
+  "pid": 12345,
+  "grantCommand": "tmux-mcp grant r-8f3k2 <target>",
+  "candidates": [
+    { "id": "%3", "label": "%3  main:1.2  zsh  \"logs\"" },
+    { "id": "%5", "label": "%5  main:2.0  node  \"server\"" }
+  ]
+}
+```
+
+Also in env: `TMUX_MCP_REQUEST_ID`, `TMUX_MCP_REASON`, `TMUX_MCP_KIND`,
+`TMUX_MCP_REQUESTS_DIR`.
+
+Output contract (stdout, trimmed, first line only):
+
+| stdout | meaning |
+|---|---|
+| a candidate id (`%3`, `@2`) | grant that target (validated like a grant file) |
+| `deny` or `deny: <text>` | deny, optional reason forwarded to the agent |
+| empty, exit 0 | notification only; answer arrives via grant CLI or elicitation |
+| anything else / exit ≠ 0 | logged at `warning`, ignored; request stays pending |
+
+The hook runs detached from the tool call: it keeps running after
+`request-pane` returns `pending`, and is killed when the request is answered
+through another channel or expires. Only one hook process per request.
+
+Shipped examples in `examples/assign-hooks/` (documented in the README):
+
+- `tmux-popup.sh` — `tmux display-popup -E` on the most recently active
+  client, shows the candidates, reads one line, prints it. Prompt and answer
+  in one place for humans who live in tmux.
+- `macos-dialog.sh` — `osascript display dialog … default answer`, prints
+  the typed target. Works outside tmux, needs a GUI session.
+- `notify-only.sh` — `terminal-notifier` / `notify-send` with the grant
+  command in the message body, prints nothing. For headless or remote
+  setups where the human answers with `tmux-mcp grant`.
 
 ## Tool descriptions
 
@@ -153,6 +212,9 @@ covers it; we then default `timeoutSeconds` to a safe value under the cap.
   it up; invalid target refused; deny path.
 - `test/tool-registration.test.mjs`: `request-pane` registered only with the
   flag; tools disabled as listed.
+- `test/assign-hook.test.mjs`: fake hook scripts covering each row of the
+  output contract; hook killed when another channel answers first; hook
+  failure leaves the request pending.
 - Elicitation path: unit test with a fake `elicitInput` (accept / decline /
   cancel / throws).
 - Manual: real Claude Code session with `--human-assigned`, both channels.
@@ -160,7 +222,8 @@ covers it; we then default `timeoutSeconds` to a safe value under the cap.
 ## Files
 
 - `src/grants.ts` (new), `src/request-pane.ts` (new: candidate list, channels,
-  registry), `src/cli-grant.ts` (new: subcommands)
+  registry), `src/assign-hook.ts` (new: spawn + output contract),
+  `src/cli-grant.ts` (new: subcommands), `examples/assign-hooks/*.sh` (new)
 - `src/scope.ts` (consult grants), `src/index.ts` (flag parsing, tool,
   descriptions, disable list, subcommand dispatch before server start)
 - `README.md` (new section), `docs/plans/…-plan.md` (next step)
