@@ -1422,20 +1422,30 @@ export interface TmuxPaneInventory {
 }
 
 /**
+ * Field separator for the inventory format.
+ *
+ * NOT a tab: tmux escapes control characters in `-F` output when the
+ * environment lacks a UTF-8 locale (a tab comes back as '_'), which silently
+ * collapses every row into one field. This printable sequence survives, and
+ * the title absorbs any occurrence of it in the last field.
+ */
+const INVENTORY_SEP = '|~|';
+
+/**
  * Inventory every pane on the tmux server in one call.
  *
- * Fields are tab-separated: pane titles and window names may contain ':',
- * which would break the ':'-separated formats used by the older helpers.
+ * ':' cannot be used as a separator here (the older helpers do, and break on
+ * titles containing it), so fields are separated by INVENTORY_SEP.
  */
 export async function listAllPanes(): Promise<TmuxPaneInventory[]> {
   const format = [
     '#{pane_id}', '#{window_id}', '#{session_id}', '#{session_name}',
     '#{window_name}', '#{pane_index}', '#{pane_current_command}', '#{pane_title}',
-  ].join('\t');
+  ].join(INVENTORY_SEP);
   const output = await executeTmux(['list-panes', '-a', '-F', format]);
   if (!output) return [];
   return output.split('\n').flatMap(line => {
-    const f = line.split('\t');
+    const f = line.split(INVENTORY_SEP);
     if (f.length < 8) return [];
     return [{
       paneId: f[0],
@@ -1445,7 +1455,8 @@ export async function listAllPanes(): Promise<TmuxPaneInventory[]> {
       windowName: f[4],
       paneIndex: f[5],
       currentCommand: f[6],
-      title: f[7],
+      // A title containing the separator would otherwise be truncated.
+      title: f.slice(7).join(INVENTORY_SEP),
     }];
   });
 }

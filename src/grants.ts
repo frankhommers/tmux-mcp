@@ -32,6 +32,19 @@ export function isWindowGranted(windowId: string): boolean {
   return grants.get(windowId)?.kind === 'window';
 }
 
+/**
+ * True when a window should appear in listings: either it was granted whole,
+ * or it holds a granted pane. Listings show the path to what you were given;
+ * access to the window itself still requires isWindowGranted().
+ */
+export function isWindowVisible(windowId: string): boolean {
+  if (isWindowGranted(windowId)) return true;
+  for (const record of grants.values()) {
+    if (record.windowId === windowId) return true;
+  }
+  return false;
+}
+
 export function isSessionGranted(sessionId: string): boolean {
   for (const record of grants.values()) {
     if (record.sessionId === sessionId) return true;

@@ -1,5 +1,5 @@
 import { executeTmux } from "./tmux.js";
-import { isPaneGranted, isWindowGranted, isSessionGranted } from "./grants.js";
+import { isPaneGranted, isWindowGranted, isSessionGranted, isWindowVisible } from "./grants.js";
 
 type ScopeMode = 'none' | 'session' | 'window';
 
@@ -101,7 +101,18 @@ export async function ensureScopeResolved(): Promise<void> {
  * Returns true if scope is active (not 'none').
  */
 export function isScopeActive(): boolean {
-  return scopeMode !== 'none';
+  return scopeMode !== 'none' || humanAssigned;
+}
+
+/**
+ * Listing filter. Sessions and windows that merely contain a granted pane
+ * stay visible, so the agent can see the path to what it was given, while
+ * isInScope() still governs what it may act on.
+ */
+export async function isVisibleInScope(id: string, type: 'window' | 'session'): Promise<boolean> {
+  if (!(await isInStaticScope(id, type))) return false;
+  if (!humanAssigned) return true;
+  return type === 'session' ? isSessionGranted(id) : isWindowVisible(id);
 }
 
 /**

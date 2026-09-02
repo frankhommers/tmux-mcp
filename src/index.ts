@@ -5,10 +5,16 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as tmux from "./tmux.js";
-import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId, ensureScopeResolved, initHumanAssigned, isHumanAssigned } from "./scope.js";
+import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId, ensureScopeResolved, initHumanAssigned, isHumanAssigned, isVisibleInScope } from "./scope.js";
 import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
+import { addGrant, pruneGrants } from './grants.js';
+import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, expireRequests } from './requests.js';
+import type { Answer, PaneRequest } from './requests.js';
+import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
+import { spawnAssignHook } from './assign-hook.js';
+import { clientSupportsElicitation, startElicitation } from './elicit-channel.js';
 
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
@@ -98,6 +104,74 @@ const server = new McpServer({
     logging: {}
   }
 });
+
+// --- Human-assigned mode state ------------------------------------------
+// Resolved in main(); the request-pane tool only runs after connect().
+let requestsDir = '';
+let assignHookPath: string | undefined;
+const REQUEST_EXPIRY_MS = 30 * 60 * 1000;
+const DEFAULT_REQUEST_TIMEOUT_SECONDS = 30;
+// Channel teardown functions per request id, run once the request settles.
+const requestCleanups = new Map<string, Array<() => void>>();
+// The registry keeps settled requests, but the settle listener needs the
+// candidates to turn an answer into a grant, so snapshot them here.
+const pendingRequestSnapshots = new Map<string, PaneRequest>();
+
+function logToClient(level: 'info' | 'warning', message: string): void {
+  void server.server.sendLoggingMessage({ level, data: `[human-assigned] ${message}` }).catch(() => { /* ignore */ });
+}
+
+/** Best-effort human-visible ping on every attached tmux client. */
+async function notifyAttachedClients(request: PaneRequest): Promise<void> {
+  try {
+    await tmux.executeTmux([
+      'display-message', '-a',
+      `tmux-mcp: agent requests a ${request.kind} (${request.reason}) - tmux-mcp grant ${request.id} <target>`,
+    ]);
+  } catch {
+    // No tmux server or no attached client: the other channels still work.
+  }
+}
+
+function cleanupRequest(id: string): void {
+  for (const stop of requestCleanups.get(id) ?? []) {
+    try { stop(); } catch { /* already stopped */ }
+  }
+  requestCleanups.delete(id);
+  void removeRequestFiles(requestsDir, id).catch(() => { /* ignore */ });
+}
+
+/**
+ * A pane split off a granted pane lives inside what the human handed over,
+ * so it inherits the grant. Without this the agent would have to ask again
+ * for a pane it just created.
+ */
+async function autoGrantNewPane(paneId: string): Promise<void> {
+  if (!humanAssigned) return;
+  try {
+    const { windowId, sessionId } = await tmux.getPaneLocation(paneId);
+    addGrant({ kind: 'pane', id: paneId, windowId, sessionId });
+  } catch {
+    logToClient('warning', `could not auto-grant new pane ${paneId}`);
+  }
+}
+
+/** Forget grants whose pane or window has disappeared. */
+async function pruneStaleGrants(): Promise<void> {
+  try {
+    const panes = await tmux.listAllPanes();
+    const windowIds = await tmux.listAllWindowIds();
+    const removed = pruneGrants(
+      new Set(panes.map(pane => pane.paneId)),
+      new Set(windowIds)
+    );
+    if (removed.length > 0) {
+      logToClient('info', `dropped grants for closed resources: ${removed.join(', ')}`);
+    }
+  } catch {
+    // tmux unavailable: keep the grants; every tool still validates on use.
+  }
+}
 
 // List all tmux sessions - Tool
 server.tool(
@@ -214,10 +288,10 @@ server.tool(
     try {
       await assertInScope(sessionId, 'session');
       let windows = await tmux.listWindows(sessionId);
-      if (isWindowScope()) {
+      if (isWindowScope() || isHumanAssigned()) {
         const filtered = [];
         for (const w of windows) {
-          if (await isInScope(w.id, 'window')) filtered.push(w);
+          if (await isVisibleInScope(w.id, 'window')) filtered.push(w);
         }
         windows = filtered;
       }
@@ -777,6 +851,90 @@ server.tool(
   }
 );
 
+// Request a pane from a human - Tool (only in --human-assigned mode)
+if (humanAssigned) {
+  server.tool(
+    "request-pane",
+    "Ask a human to assign you a tmux pane (or window). In human-assigned mode you start with access to nothing: no pane is visible or usable until a human hands you one with this tool. Give a short, honest `reason` — the human reads it verbatim before deciding. Returns Status: granted with the pane id, Status: denied, or Status: pending with a Request ID when the human has not answered yet. On pending, call this tool again with that requestId to keep waiting; the request stays open for 30 minutes.",
+    {
+      reason: z.string().min(1).max(200).describe("Why you need the pane. Shown to the human verbatim, so be specific: 'run the test suite', 'tail the dev server log'."),
+      kind: z.enum(["pane", "window"]).optional().describe("Ask for a single pane (default) or a whole window (every pane inside it becomes usable)."),
+      timeoutSeconds: z.number().min(1).optional().describe(`How long to wait for the human before returning Status: pending. Default ${DEFAULT_REQUEST_TIMEOUT_SECONDS}s.`),
+      requestId: z.string().optional().describe("Poll an earlier request that returned Status: pending. When set, `reason` is ignored and no new request is created."),
+    },
+    async ({ reason, kind, timeoutSeconds, requestId }) => {
+      try {
+        expireRequests(REQUEST_EXPIRY_MS);
+        const waitSeconds = timeoutSeconds ?? DEFAULT_REQUEST_TIMEOUT_SECONDS;
+        const timeoutCheck = checkBlockingTimeout(waitSeconds);
+        if (!timeoutCheck.ok) {
+          return { content: [{ type: "text", text: timeoutCheck.message }], isError: true };
+        }
+
+        let request: PaneRequest;
+        if (requestId) {
+          const existing = getRequest(requestId);
+          if (!existing) {
+            return {
+              content: [{ type: "text", text: `Status: expired\nRequest ID: ${requestId}\nThe request is no longer pending (expired or unknown). Call request-pane again with a reason to ask afresh.` }],
+              isError: true,
+            };
+          }
+          request = existing;
+        } else {
+          const requestKind = kind ?? 'pane';
+          const candidates = await buildCandidates(requestKind);
+          if (candidates.length === 0) {
+            return {
+              content: [{ type: "text", text: `Status: no_candidates\nThere is no ${requestKind} a human could assign right now.` }],
+              isError: true,
+            };
+          }
+          request = createRequest(reason, requestKind, candidates);
+          pendingRequestSnapshots.set(request.id, request);
+          await writeRequestFile(requestsDir, request);
+          void notifyAttachedClients(request);
+          logToClient('info', `pane request ${request.id}: ${reason}`);
+
+          const created = request;
+          const cleanups: Array<() => void> = [];
+          if (clientSupportsElicitation(server.server)) {
+            cleanups.push(startElicitation(server.server, created, answer => {
+              answerRequest(created.id, answer);
+            }, logToClient));
+          }
+          if (assignHookPath) {
+            cleanups.push(spawnAssignHook(assignHookPath, created, requestsDir, answer => {
+              answerRequest(created.id, answer);
+            }, logToClient));
+          }
+          requestCleanups.set(created.id, cleanups);
+        }
+
+        const answer = await waitForAnswer(request.id, waitSeconds * 1000);
+        if (!answer) {
+          return {
+            content: [{ type: "text", text: `Status: pending\nRequest ID: ${request.id}\nNobody has answered yet. Call request-pane again with requestId="${request.id}" to keep waiting, or do something else in the meantime. The request stays open for 30 minutes.` }],
+          };
+        }
+        if (answer.status === 'denied') {
+          return {
+            content: [{ type: "text", text: `Status: denied\nRequest ID: ${request.id}${answer.reason ? `\nReason: ${answer.reason}` : ''}\nThe human declined. Do not retry the same request without new information.` }],
+            isError: true,
+          };
+        }
+        const label = request.candidates.find(c => c.id === answer.target)?.label ?? answer.target;
+        const noun = request.kind === 'pane' ? 'Pane' : 'Window';
+        return {
+          content: [{ type: "text", text: `Status: granted\n${noun}: ${answer.target}\nAssigned via: ${answer.via}\nDetails: ${label}\nYou may now use this ${request.kind}. Everything else remains off limits.` }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text", text: `Error requesting a pane: ${error}` }], isError: true };
+      }
+    }
+  );
+}
+
 // Move window - Tool
 const moveWindowTool = server.tool(
   "move-window",
@@ -1189,10 +1347,10 @@ server.resource(
         // For each session, get all windows
         for (const session of sessions) {
           let windows = await tmux.listWindows(session.id);
-          if (isWindowScope()) {
+          if (isWindowScope() || isHumanAssigned()) {
             const filteredWindows = [];
             for (const w of windows) {
-              if (await isInScope(w.id, 'window')) filteredWindows.push(w);
+              if (await isVisibleInScope(w.id, 'window')) filteredWindows.push(w);
             }
             windows = filteredWindows;
           }
@@ -1204,6 +1362,8 @@ server.resource(
             // Include the agent's own pane in the listing so agents know it exists
             // (e.g. for splitting), even though its content is not readable.
             for (const pane of panes) {
+              // In human-assigned mode only assigned panes are exposed.
+              if (isHumanAssigned() && !(await isInScope(pane.id, 'pane'))) continue;
               const isSelf = isExcludedPane(pane.id);
               paneResources.push({
                 name: `Pane: ${session.name} - ${pane.id} - ${pane.title} ${pane.active ? "(active)" : ""}${isSelf ? " (self)" : ""}`,
@@ -1602,6 +1762,8 @@ async function main() {
 
     // Human-assigned mode: start with no access, grow only through grants.
     initHumanAssigned(humanAssigned);
+    requestsDir = resolveRequestsDir(values['requests-dir'] as string | undefined);
+    assignHookPath = (values['assign-hook'] as string | undefined) ?? process.env.TMUX_MCP_ASSIGN_HOOK;
 
     // Initialize default split direction
     const splitDir = values['default-split-direction'] ?? process.env.TMUX_MCP_DEFAULT_SPLIT_DIRECTION;
@@ -1627,6 +1789,35 @@ async function main() {
     // Start the MCP server
     const transport = new StdioServerTransport();
     await server.connect(transport);
+
+    if (humanAssigned) {
+      // A granted request becomes a grant, and its channels are torn down.
+      onRequestSettled((id: string, answer: Answer) => {
+        const snapshot = pendingRequestSnapshots.get(id);
+        if (answer.status === 'granted' && snapshot) {
+          const candidate = snapshot.candidates.find(c => c.id === answer.target);
+          if (candidate) {
+            addGrant({
+              kind: snapshot.kind,
+              id: candidate.id,
+              windowId: candidate.windowId,
+              sessionId: candidate.sessionId,
+            });
+            logToClient('info', `granted ${candidate.id} via ${answer.via}`);
+            try { server.sendResourceListChanged(); } catch { /* ignore */ }
+          }
+        }
+        pendingRequestSnapshots.delete(id);
+        cleanupRequest(id);
+      });
+
+      const stopWatcher = startAnswerWatcher(requestsDir, (id, answer) => {
+        if (!answerRequest(id, answer)) {
+          logToClient('warning', `ignored answer for ${id} (unknown request or invalid target)`);
+        }
+      });
+      process.once('exit', stopWatcher);
+    }
 
     // Wire resource-change notifications.
     // 1) Async command lifecycle: pending -> completed/error -> updated.

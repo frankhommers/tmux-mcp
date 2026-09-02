@@ -4,6 +4,14 @@ import type { Answer, PaneRequest } from './requests.js';
  * The slice of the MCP Server class this channel needs. Declared structurally
  * so tests can pass a fake without constructing a real server.
  */
+export interface ElicitEnumField {
+  type: 'string';
+  title?: string;
+  description?: string;
+  enum: string[];
+  enumNames?: string[];
+}
+
 export interface ElicitCapableServer {
   getClientCapabilities(): { elicitation?: unknown } | undefined;
   elicitInput(
@@ -11,7 +19,7 @@ export interface ElicitCapableServer {
       message: string;
       requestedSchema: {
         type: 'object';
-        properties: Record<string, unknown>;
+        properties: { [key: string]: ElicitEnumField };
         required?: string[];
       };
     },
@@ -45,7 +53,7 @@ export function startElicitation(
       type: 'object' as const,
       properties: {
         target: {
-          type: 'string',
+          type: 'string' as const,
           title: `tmux ${noun}`,
           description: `The ${noun} the agent may use.`,
           enum: [...request.candidates.map(c => c.id), 'deny'],
