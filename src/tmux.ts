@@ -1409,3 +1409,50 @@ export async function waitForPaneContentGone(
   }
   return { gone: false };
 }
+
+export interface TmuxPaneInventory {
+  paneId: string;
+  windowId: string;
+  sessionId: string;
+  sessionName: string;
+  windowName: string;
+  paneIndex: string;
+  currentCommand: string;
+  title: string;
+}
+
+/**
+ * Inventory every pane on the tmux server in one call.
+ *
+ * Fields are tab-separated: pane titles and window names may contain ':',
+ * which would break the ':'-separated formats used by the older helpers.
+ */
+export async function listAllPanes(): Promise<TmuxPaneInventory[]> {
+  const format = [
+    '#{pane_id}', '#{window_id}', '#{session_id}', '#{session_name}',
+    '#{window_name}', '#{pane_index}', '#{pane_current_command}', '#{pane_title}',
+  ].join('\t');
+  const output = await executeTmux(['list-panes', '-a', '-F', format]);
+  if (!output) return [];
+  return output.split('\n').flatMap(line => {
+    const f = line.split('\t');
+    if (f.length < 8) return [];
+    return [{
+      paneId: f[0],
+      windowId: f[1],
+      sessionId: f[2],
+      sessionName: f[3],
+      windowName: f[4],
+      paneIndex: f[5],
+      currentCommand: f[6],
+      title: f[7],
+    }];
+  });
+}
+
+/** Every window id on the tmux server. Used to prune stale grants. */
+export async function listAllWindowIds(): Promise<string[]> {
+  const output = await executeTmux(['list-windows', '-a', '-F', '#{window_id}']);
+  if (!output) return [];
+  return output.split('\n').filter(Boolean);
+}
