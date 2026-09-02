@@ -74,6 +74,9 @@ npx --prefer-online -y github:frankhommers/tmux-mcp --scope=session --default-sp
 | `--scope=none\|session\|window` | `TMUX_MCP_SCOPE` | `none` | Restrict access to a specific scope (see below) |
 | `--include-current-pane` | — | excluded | Allow the agent to interact with its own pane |
 | `--default-split-direction=horizontal\|vertical` | `TMUX_MCP_DEFAULT_SPLIT_DIRECTION` | `horizontal` | Default direction for `split-pane` and `new-pane` |
+| `--human-assigned` | `TMUX_MCP_HUMAN_ASSIGNED` | off | Start with no access; a human assigns every pane (see below) |
+| `--assign-hook=<path>` | `TMUX_MCP_ASSIGN_HOOK` | — | Script that asks the human (see below) |
+| `--requests-dir=<path>` | `TMUX_MCP_REQUESTS_DIR` | `~/.tmux-mcp/requests` | Where pending pane requests are stored |
 | `--shell-type=bash\|zsh\|fish` (`-s`) | — | — | Shell type for the target pane |
 
 #### Scope
@@ -87,6 +90,60 @@ By default the MCP server has unrestricted access to all tmux sessions, windows 
 | `window` | Only the window the server runs in | `create-session`, `create-window`, `kill-window`, `move-window` |
 
 Tools that fall outside the active scope are **removed from the tool list** — the LLM never sees them. Remaining tools that accept an ID (like `capture-pane` or `execute-command-async`) still validate that the target is within the allowed scope at runtime.
+
+#### Human-assigned access
+
+`--human-assigned` starts the agent with access to **nothing**: no session,
+window or pane is visible or usable. The agent asks for one with the
+`request-pane` tool, a human assigns it, and only then does it enter scope.
+Splitting an assigned pane yields another assigned pane; everything else stays
+off limits. It combines with `--scope`: an assignment outside the static scope
+is refused. `create-session`, `create-window` and `move-window` are removed
+from the tool list.
+
+The agent's request carries a short reason, which the human reads verbatim
+before deciding. A request can be answered through three channels, whichever
+comes first — the agent is in none of them, so it cannot answer its own
+request:
+
+1. **Elicitation** — used automatically when the MCP client supports it. The
+   question appears in the client's own UI (Claude Code shows a prompt).
+2. **The CLI** — from any shell, including over SSH:
+
+   ```bash
+   tmux-mcp requests                  # what is pending, with the candidates
+   tmux-mcp grant r-8f3k2 %3          # assign pane %3
+   tmux-mcp deny r-8f3k2 "not now"
+   ```
+
+3. **An assign hook** — your own script, for any other way of asking.
+
+Unanswered requests stay open for 30 minutes; `request-pane` returns
+`Status: pending` with a request id that the agent polls.
+
+##### Assign hook contract
+
+The hook is spawned once per request. It receives the request as JSON on stdin
+(`id`, `reason`, `kind`, `candidates[].id`, `candidates[].label`,
+`grantCommand`) plus `TMUX_MCP_REQUEST_ID`, `TMUX_MCP_REASON`,
+`TMUX_MCP_KIND` and `TMUX_MCP_REQUESTS_DIR` in the environment.
+
+| First line of stdout | Meaning |
+|------|---------|
+| a candidate id (`%3`, `@2`) | assign that target |
+| `deny` or `deny: <reason>` | refuse; the reason is forwarded to the agent |
+| empty, exit 0 | notification only; the answer arrives via the CLI |
+| anything else, or exit ≠ 0 | logged and ignored; the request stays pending |
+
+Ready-made examples in [`examples/assign-hooks/`](examples/assign-hooks):
+`tmux-popup.sh` (popup inside tmux), `macos-dialog.sh` (GUI dialog),
+`notify-only.sh` (desktop notification, answered with the CLI).
+
+> **Scope is only as strong as the agent's other tools.** An agent that can
+> also run arbitrary shell commands can call `tmux` directly and bypass this
+> server entirely. `--human-assigned` restricts this MCP server, not tmux.
+> Anything that can write to the requests directory can assign a pane, so it
+> is created `0700`.
 
 ## Available Resources
 

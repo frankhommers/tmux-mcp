@@ -81,3 +81,24 @@ test('unknown output is ignored', async () => {
   const path = await hookScript('echo "maybe later"');
   assert.equal(await runHook(path), null);
 });
+
+import { access, constants } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+test('shipped example hooks are executable and follow the contract', async () => {
+  for (const name of ['tmux-popup.sh', 'macos-dialog.sh', 'notify-only.sh']) {
+    await access(new URL(`../examples/assign-hooks/${name}`, import.meta.url), constants.X_OK);
+  }
+  // notify-only never answers, whatever the request looks like.
+  const answer = await new Promise(resolve => {
+    spawnAssignHook(
+      fileURLToPath(new URL('../examples/assign-hooks/notify-only.sh', import.meta.url)),
+      REQUEST,
+      '/tmp',
+      () => resolve('answered'),
+      () => {}
+    );
+    setTimeout(() => resolve(null), 2500);
+  });
+  assert.equal(answer, null);
+});
