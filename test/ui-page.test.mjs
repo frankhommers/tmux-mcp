@@ -16,14 +16,23 @@ async function withDaemon(run) {
   }
 }
 
-test('the page is served, and carries the token from the query string', async () => {
+test('the page is served and names its fingerprinted assets', async () => {
   await withDaemon(async daemon => {
     const res = await fetch(`${daemon.url}/?t=${daemon.token}`);
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type'), /text\/html/);
     const html = await res.text();
-    assert.match(html, /<script type="module" src="\/app\.js"><\/script>/);
-    assert.match(html, /app\.css/);
+    const script = html.match(/src="(\/assets\/[^"]+\.js)"/);
+    const style = html.match(/href="(\/assets\/[^"]+\.css)"/);
+    assert.ok(script, `expected a built script tag, got: ${html}`);
+    assert.ok(style, `expected a built stylesheet link, got: ${html}`);
+
+    // The browser fetches those without any credentials.
+    const js = await fetch(`${daemon.url}${script[1]}`);
+    assert.equal(js.status, 200);
+    assert.match(js.headers.get('content-type'), /javascript/);
+    assert.match(js.headers.get('cache-control'), /immutable/);
+    assert.equal((await fetch(`${daemon.url}${style[1]}`)).status, 200);
   });
 });
 
@@ -35,15 +44,10 @@ test('a deep link to one request serves the same page', async () => {
   });
 });
 
-test('the page assets are served with the right content types', async () => {
+test('a path outside the public directory is refused', async () => {
   await withDaemon(async daemon => {
-    const css = await fetch(`${daemon.url}/app.css?t=${daemon.token}`);
-    assert.equal(css.status, 200);
-    assert.match(css.headers.get('content-type'), /text\/css/);
-
-    const js = await fetch(`${daemon.url}/app.js?t=${daemon.token}`);
-    assert.equal(js.status, 200);
-    assert.match(js.headers.get('content-type'), /javascript/);
+    const res = await fetch(`${daemon.url}/assets/${encodeURIComponent('../../../etc/passwd')}`);
+    assert.ok([403, 404].includes(res.status), `expected 403/404, got ${res.status}`);
   });
 });
 
@@ -52,9 +56,9 @@ test('the app shell loads the way a browser loads it', async () => {
     // A browser fetches the page with the token in the query string, but
     // requests app.js and app.css as subresources: no header, no query.
     // Requiring a token on those leaves a page that never runs its script.
-    assert.equal((await fetch(`${daemon.url}/?t=${daemon.token}`)).status, 200);
-    assert.equal((await fetch(`${daemon.url}/app.js`)).status, 200);
-    assert.equal((await fetch(`${daemon.url}/app.css`)).status, 200);
+    const html = await (await fetch(`${daemon.url}/?t=${daemon.token}`)).text();
+    const script = html.match(/src="(\/assets\/[^"]+\.js)"/)[1];
+    assert.equal((await fetch(`${daemon.url}${script}`)).status, 200);
     assert.equal((await fetch(`${daemon.url}/r/r-abc123`)).status, 200);
   });
 });

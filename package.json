@@ -7,12 +7,13 @@
   "scripts": {
     "build": "tsc && npm run copy-ui",
     "test": "npm run build && node --test test/*.test.mjs",
-    "prepare": "tsc",
+    "prepare": "npm run build",
     "start": "node build/index.js",
     "dev": "tsc -w",
     "check-release": "npm run build && npm publish --dry-run",
     "release": "npm run build && npm publish",
-    "copy-ui": "mkdir -p build/ui/public && cp src/ui/public/* build/ui/public/"
+    "copy-ui": "mkdir -p build/ui/public && cp -R ui-dist/. build/ui/public/",
+    "build:ui": "cd ui && npm run build"
   },
   "bin": {
     "tmux-mcp": "build/index.js"

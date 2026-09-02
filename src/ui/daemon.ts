@@ -80,10 +80,9 @@ function isLocalHost(host: string | undefined, port: number): boolean {
 
 /** Static app-shell paths, served without a token (they contain no data). */
 function isPublicPath(pathname: string): boolean {
-  return pathname === '/'
-    || pathname === '/app.css'
-    || pathname === '/app.js'
-    || pathname.startsWith('/r/');
+  if (pathname === '/' || pathname.startsWith('/r/') || pathname.startsWith('/assets/')) return true;
+  // Root-level static files (favicon, vite.svg). Never /api or /events.
+  return /^\/[\w.-]+\.(?:js|css|svg|png|ico|woff2|map)$/.test(pathname);
 }
 
 function isAllowedOrigin(origin: string | undefined, port: number): boolean {
@@ -119,8 +118,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   // Route modules register on load; importing here keeps the module graph
   // acyclic at evaluation time (they import registerRoute from this file).
   await import('./api-requests.js');
-  await import('./static.js');
+  // Before static.js: its catch-all '/:file' route would otherwise shadow
+  // '/events', because the first matching route wins.
   const { startRequestsWatcher, broadcast } = await import('./events.js');
+  await import('./static.js');
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const port = (server.address() as AddressInfo).port;
