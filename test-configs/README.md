@@ -31,6 +31,24 @@ The paths inside are absolute, so starting from anywhere else works too:
 claude --mcp-config test-configs/.mcp.json
 ```
 
+## The macOS dialog is switched on
+
+`.mcp.json` runs with `--assign-hook=examples/assign-hooks/macos-dialog.sh`,
+so a request pops up a macOS dialog with a text field and Deny/Assign buttons.
+It needs a GUI session (not plain SSH) but no Automation or Accessibility
+permission — the dialog belongs to `osascript`, which brings itself to the
+front.
+
+The dialog lists the panes that existed when the agent asked, but you may type
+**any** pane id, including one you open while the dialog is on screen. That is
+the point: read the request, open a pane, type its id.
+
+It gives up after 30 minutes. Giving up, closing it, or having no GUI prints
+nothing, which simply leaves the request open for `tmux-mcp grant` — you never
+lose a request by ignoring the dialog.
+
+To go back to no dialog, drop the `--assign-hook` argument.
+
 ## One server on purpose
 
 Only `tmux-human-assigned` is configured. Adding a variant per flag
@@ -40,12 +58,12 @@ agent full access anyway — which defeats what you are testing.
 
 To test another variant, edit the `args` array:
 
-| Add this argument | What it changes |
-|-------------------|-----------------|
-| `--assign-hook=<repo>/examples/assign-hooks/tmux-popup.sh` | Ask in a `tmux display-popup` on the attached client (needs tmux >= 3.2) |
-| `--assign-hook=<repo>/examples/assign-hooks/notify-only.sh` | Desktop notification only; answer with the grant CLI |
-| `--assign-hook=<repo>/examples/assign-hooks/macos-dialog.sh` | Ask in a macOS dialog (needs a GUI session) |
-| `--scope=window` | Intersect with the static scope: assignments outside the server's own window are refused |
+| Change this argument | What it changes |
+|----------------------|-----------------|
+| `--assign-hook=…/tmux-popup.sh` | Ask in a `tmux display-popup` on the attached client (needs tmux >= 3.2) |
+| `--assign-hook=…/notify-only.sh` | Desktop notification only; answer with the grant CLI |
+| drop `--assign-hook` | No hook: elicitation in the client UI, plus the grant CLI |
+| add `--scope=window` | Intersect with the static scope: assignments outside the server's own window are refused |
 
 Restart Claude Code after editing.
 
