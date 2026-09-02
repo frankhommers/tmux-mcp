@@ -1,6 +1,6 @@
-# Test configurations
+# Test configuration
 
-`.mcp.json` points at this checkout's own build, so you can try the
+`.mcp.json` starts this checkout's own build, so you can try the
 human-assigned mode against local changes. JSON has no comments and not every
 client accepts JSONC, so `.mcp.json` is strict JSON and the commentary lives
 here.
@@ -8,10 +8,10 @@ here.
 ## Before you start
 
 ```bash
-npm run build            # mcp.json runs build/index.js, which is gitignored
+npm run build      # .mcp.json runs build/index.js, which is gitignored
 ```
 
-## Using it with Claude Code
+## Starting it
 
 Claude Code loads `.mcp.json` from the directory you start in, so no flags are
 needed:
@@ -21,30 +21,46 @@ cd test-configs
 claude
 ```
 
+On the first start Claude Code asks whether to trust the project's MCP
+servers. Until you approve, the server does not load and you will only see
+whatever is configured globally.
+
 The paths inside are absolute, so starting from anywhere else works too:
 
 ```bash
 claude --mcp-config test-configs/.mcp.json
 ```
 
-All five servers are in one file. Claude Code starts every server it finds, so
-delete the entries you are not testing — an agent that can reach
-`tmux-unrestricted` is not restricted by the human-assigned entries.
+## One server on purpose
 
-## What each entry is for
+Only `tmux-human-assigned` is configured. Adding a variant per flag
+combination would mean several processes and a few hundred near-identical
+tools in context, and any unrestricted entry alongside them would hand the
+agent full access anyway — which defeats what you are testing.
 
-| Server | Flags | What it exercises |
-|--------|-------|-------------------|
-| `tmux-human-assigned` | `--human-assigned` | The default: elicitation when the client supports it, plus the grant CLI. Start here. |
-| `tmux-human-assigned-popup` | `+ --assign-hook=examples/assign-hooks/tmux-popup.sh` | A `tmux display-popup` prompt on the attached client. Needs tmux >= 3.2 and an attached client. |
-| `tmux-human-assigned-notify` | `+ --assign-hook=examples/assign-hooks/notify-only.sh` | Desktop notification only; you answer with the grant CLI. The headless/SSH story. |
-| `tmux-human-assigned-window-scope` | `+ --scope=window` | The intersection rule: assignments outside the server's own window are refused. |
-| `tmux-unrestricted` | none | The old behaviour, as a baseline to compare against. |
+To test another variant, edit the `args` array:
 
-Every human-assigned entry writes pending requests to
-`test-configs/requests/` instead of `~/.tmux-mcp/requests`, so a test run
-never touches your real one and you can watch the files appear. The directory
-is gitignored.
+| Add this argument | What it changes |
+|-------------------|-----------------|
+| `--assign-hook=<repo>/examples/assign-hooks/tmux-popup.sh` | Ask in a `tmux display-popup` on the attached client (needs tmux >= 3.2) |
+| `--assign-hook=<repo>/examples/assign-hooks/notify-only.sh` | Desktop notification only; answer with the grant CLI |
+| `--assign-hook=<repo>/examples/assign-hooks/macos-dialog.sh` | Ask in a macOS dialog (needs a GUI session) |
+| `--scope=window` | Intersect with the static scope: assignments outside the server's own window are refused |
+
+Restart Claude Code after editing.
+
+## Your global tmux server also loads
+
+`~/.claude.json` registers a user-scope `tmux` server (the published npx
+build). It loads in every directory, including this one, and it is **not**
+restricted. Two consequences:
+
+- Tools are prefixed per server, so check the right one. `list-sessions` via
+  `mcp__tmux-human-assigned__…` returns `[]` before any assignment;
+  `mcp__tmux__…` returns everything. Only the first tells you anything about
+  human-assigned mode.
+- An agent in this session can still reach the unrestricted server. Disable it
+  from `/mcp` if you want a clean test.
 
 ## Answering a request
 
@@ -60,16 +76,21 @@ node build/index.js deny  <request-id> "not now" --requests-dir=test-configs/req
 (After `npm link` or a global install the same commands are
 `tmux-mcp requests`, `tmux-mcp grant …`, `tmux-mcp deny …`.)
 
-The three channels race and the first answer wins, so you can leave an
-elicitation prompt open and still grant from the shell.
+When the client supports elicitation, Claude Code also shows the question
+directly. The channels race and the first answer wins, so you can leave the
+prompt open and still grant from the shell.
+
+Requests are written to `test-configs/requests/` instead of
+`~/.tmux-mcp/requests`, so a test run never touches your real one and you can
+watch the files appear. That directory is gitignored.
 
 ## What to look for
 
-- Before any grant, `list-sessions` returns `[]` and `capture-pane` on a real
-  pane is denied. The agent cannot see what it was not given.
+- Before any assignment, `list-sessions` returns `[]` and `capture-pane` on a
+  real pane is denied. The agent cannot see what it was not given.
 - The request file in `test-configs/requests/` holds the candidate list. The
   agent never receives it — only the pane it was assigned.
-- After a grant, splitting that pane yields another usable pane; every other
-  pane stays denied.
+- After an assignment, splitting that pane yields another usable pane; every
+  other pane stays denied.
 - `create-session`, `create-window` and `move-window` are absent from the tool
-  list in human-assigned mode.
+  list.
