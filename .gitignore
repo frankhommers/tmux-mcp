@@ -6,3 +6,4 @@ build/
 .yolo.json
 .worktrees/
 test-configs/requests/
+test-configs/state/

@@ -5,8 +5,9 @@
       "args": [
         "/Users/frankhommers/Repos/tmux-mcp/build/index.js",
         "--human-assigned",
+        "--ui",
         "--requests-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/requests",
-        "--assign-hook=/Users/frankhommers/Repos/tmux-mcp/examples/assign-hooks/macos-dialog.sh"
+        "--state-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/state"
       ]
     }
   }

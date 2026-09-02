@@ -109,11 +109,24 @@ reading the request and handing over that one is the expected workflow. What
 is checked at answer time is that the target exists, sits inside `--scope`,
 and is not the server's own pane.
 
-A request can be answered through three channels, whichever comes first — the
-agent is in none of them, so it cannot answer its own request:
+A request is answered outside the agent's client — the agent is in none of
+these paths, so it cannot answer its own request:
 
-1. **Elicitation** — used automatically when the MCP client supports it. The
-   question appears in the client's own UI (Claude Code shows a prompt).
+1. **The control UI** — `--ui` starts a local web server, one per machine and
+   shared by every tmux-mcp process, at `http://127.0.0.1:7676`. It lists
+   pending requests with a **live** target list: a pane you open after reading
+   the request is assignable, which a snapshot prompt can never do.
+
+   ```bash
+   tmux-mcp ui              # run it yourself
+   tmux-mcp ui --print-url  # the URL, including the access token
+   tmux-mcp ui --stop
+   ```
+
+   The daemon writes `~/.tmux-mcp/ui.json` (pid, port, token, mode 0600). An
+   MCP server started with `--ui` reuses a running daemon and otherwise spawns
+   one, under a lock so simultaneous agents produce exactly one.
+
 2. **The CLI** — from any shell, including over SSH:
 
    ```bash
@@ -122,22 +135,28 @@ agent is in none of them, so it cannot answer its own request:
    tmux-mcp deny r-8f3k2 "not now"
    ```
 
-   `requests` lists the panes assignable *now*, so a pane you just opened
-   appears without the agent having to ask again.
+3. **An assign hook** — your own script; mainly to notify you, though it may
+   answer by printing an id.
 
-3. **An assign hook** — your own script, for any other way of asking.
+There is deliberately **no MCP elicitation**. Prompting inside the agent's
+client showed a list frozen at the moment the agent asked, behaved differently
+per client, and produced a second prompt whenever a hook was also configured.
 
-Unanswered requests stay open for 30 minutes; `request-pane` returns
-`Status: pending` with a request id that the agent polls.
+The UI binds to `127.0.0.1` only, requires the token from `ui.json`, and
+rejects foreign `Host`/`Origin` headers. Whoever can read that file can assign
+panes, exactly like whoever can write to the requests directory. The UI itself
+is **not** scope-restricted — it is your tool and shows all of tmux — but an
+assignment still has to fall inside the scope recorded in the request.
 
 ##### Assign hook contract
 
 The hook is spawned once per request. It receives the request as JSON on stdin
 (`id`, `reason`, `kind`, `candidates[].id`, `candidates[].label`,
-`grantCommand`) plus `TMUX_MCP_REQUEST_ID`, `TMUX_MCP_REASON`,
-`TMUX_MCP_KIND` and `TMUX_MCP_REQUESTS_DIR` in the environment. The candidates
-are a snapshot for display; the hook may name any pane that exists when it
-answers.
+`grantCommand`, and `uiUrl` when the control UI runs) plus
+`TMUX_MCP_REQUEST_ID`, `TMUX_MCP_REASON`, `TMUX_MCP_KIND`,
+`TMUX_MCP_REQUESTS_DIR` and `TMUX_MCP_UI_URL` in the environment. The
+candidates are a snapshot for display; the hook may name any pane that exists
+when it answers.
 
 | First line of stdout | Meaning |
 |------|---------|
