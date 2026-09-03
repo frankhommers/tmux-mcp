@@ -10,7 +10,7 @@ own types and agree at runtime through `PROTOCOL_VERSION`.
 
 ## Version
 
-`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.0`**.
+`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.1`**.
 
 - Equal majors connect. A higher minor on either side is fine: unknown
   message types and unknown fields are ignored.
@@ -26,8 +26,9 @@ message type, or an optional field, is a minor bump.
 - `wss://<host>/agent` (or `ws://` on loopback).
 - The device token goes in the handshake as `Authorization: Bearer <token>`.
 - One text frame per message, JSON, with a `type` field.
-- The MCP server opens the socket when its first request appears and closes it
-  when its last request is answered. Idle means no connection.
+- The MCP server opens the socket when it has something to say — a request to
+  offer, a grant to report, a target to check — and closes it again once that
+  is settled and nothing is pending. Idle means no connection.
 - On an unclean close while a request is open, the server reconnects with
   backoff (1s, 2s, 4s … capped at 30s) and re-sends its open requests.
 
@@ -40,8 +41,9 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 ```json
 {
   "type": "hello",
-  "protocolVersion": "1.0",
+  "protocolVersion": "1.1",
   "agent": {
+    "instanceId": "0f0d8f6c-6a1f-4a3e-9a02-2b0e2f9a1d77",
     "pid": 4711,
     "host": "frank-mbp",
     "cwd": "/Users/frank/Repos/app",
@@ -51,6 +53,10 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
   }
 }
 ```
+
+`instanceId` is stable for the lifetime of one MCP server process. It is how
+dispatch tells a reconnect from a new machine. Grants live in that process's
+memory, so a new id means the old grants died with the process that held them.
 
 ### `request`
 
@@ -104,12 +110,38 @@ show that an assignment landed — or why it did not.
 
 A rejected answer leaves the request open.
 
+### `grants`
+
+Everything this server currently holds, sent after every handshake and again
+whenever a grant is added or taken away. It is a full list, not a delta: the
+last one received is the truth, so a restarted dispatch relearns the state
+from the next report.
+
+```json
+{
+  "type": "grants",
+  "grants": [
+    { "target": "%3", "kind": "pane", "label": "%3  main:code.1  zsh", "since": 1737000000000 }
+  ]
+}
+```
+
+### `check`
+
+Asked immediately before the server acts on a target it holds. Dispatch
+answers `verdict`. If no answer arrives promptly the server proceeds on its
+own grant, so a slow or absent dispatch cannot block work.
+
+```json
+{ "type": "check", "id": "c-2f1a", "target": "%3" }
+```
+
 ## Messages: dispatch → server
 
 ### `welcome`
 
 ```json
-{ "type": "welcome", "protocolVersion": "1.0", "account": "frankhommers" }
+{ "type": "welcome", "protocolVersion": "1.1", "account": "frankhommers" }
 ```
 
 ### `refuse`
@@ -135,9 +167,31 @@ path.
 { "type": "refresh", "id": "r-8f3k2a1c" }
 ```
 
+### `revoke`
+
+Take a target back. The server drops the grant and reports what is left.
+
+```json
+{ "type": "revoke", "target": "%3" }
+```
+
+### `verdict`
+
+The answer to a `check`. `allowed: false` makes the server refuse the action
+and drop the grant.
+
+```json
+{ "type": "verdict", "id": "c-2f1a", "allowed": true }
+```
+
+Dispatch remembers a revocation until the server confirms it is gone, so a
+revoke lands even when nothing was connected at the time.
+
 ## What dispatch cannot do
 
 Everything tmux-shaped stays on the MCP server. Dispatch can only name a target;
 the server checks that it exists right now, sits inside `--scope`, and is not
 the server's own pane. A compromised or buggy service can offer a bad answer
 and get a `result` with `ok: false`; it cannot widen what an agent may touch.
+The same holds in reverse for `revoke` and `verdict`: they can only take
+access away, never grant it.
