@@ -1,10 +1,10 @@
-# Containerised control UI
+# Containerised dispatch service
 
 ## Goal
 
-Run the control UI as a standalone containerised web service that knows
+Run the dispatch service as a standalone containerised web service that knows
 nothing about tmux, and let the MCP server — which already runs on the host,
-inside tmux's world — do all the tmux work and hand the UI everything it
+inside tmux's world — do all the tmux work and hand dispatch everything it
 needs over a WebSocket it opens itself.
 
 The service is meant to be reachable publicly, so a request can be answered
@@ -43,7 +43,7 @@ carries the tmux knowledge.**
 ```
   host                                   container
   ┌───────────────────────┐              ┌──────────────────────┐
-  │ tmux-mcp (MCP server) │  ws://  ───► │ tmux-mcp-ui          │
+  │ tmux-mcp (MCP server) │  ws://  ───► │ tmux-dispatch          │
   │  · talks to tmux      │              │  · serves the React  │
   │  · owns the scope     │ ◄── answer   │    app to a browser  │
   │  · validates answers  │              │  · holds the inbox   │
@@ -61,7 +61,7 @@ carries the tmux knowledge.**
 
 ### Messages
 
-Server → UI:
+Server → dispatch:
 
 | Message | Payload |
 |---|---|
@@ -71,7 +71,7 @@ Server → UI:
 | `pane-output` | pane id, the pane's current screen including escapes (parked) |
 | `withdraw` | request id, why (expired, answered elsewhere, server shutting down) |
 
-UI → server (over the same socket):
+dispatch → server (over the same socket):
 
 | Message | Payload |
 |---|---|
@@ -80,11 +80,11 @@ UI → server (over the same socket):
 | `watch` | pane id, or null to stop — start streaming that pane's screen (parked) |
 
 The server validates every answer exactly as it does today (exists now, inside
-`--scope`, not the server's own pane). The UI cannot widen anyone's access; it
+`--scope`, not the server's own pane). Dispatch cannot widen anyone's access; it
 can only pick from what it is offered, or name something the server then
 checks.
 
-### When the UI is not running
+### When dispatch is not running
 
 `connect` fails or the socket drops: the server logs it once, writes the
 request file as it does today, and the `tmux-mcp requests` / `grant` CLI
@@ -93,7 +93,7 @@ server retries the socket with backoff while the request is open.
 
 ## Pre-assigned panes
 
-A pool in the UI, so an agent that asks gets a pane immediately and you find
+A pool in dispatch, so an agent that asks gets a pane immediately and you find
 out afterwards.
 
 An entry is either a **pane id** (`%42`) or a **rule** — a glob over
@@ -101,7 +101,7 @@ An entry is either a **pane id** (`%42`) or a **rule** — a glob over
 matter because a pane id you picked yesterday may be gone, while "anything in
 session `agents`" keeps working.
 
-On a `request`, the UI matches its pool against the candidates the server just
+On a `request`, dispatch matches its pool against the candidates the server just
 sent, in the order you listed them, and answers with the first match. It then
 marks that entry used, so the same pane is not handed to two agents; an entry
 can be marked reusable if you want the opposite.
@@ -115,17 +115,17 @@ the grant while the pane is still unused. Auto-assignment never fires for a
 `kind: window` request unless the entry itself names a window.
 
 The pool is edited from the same page. Panes can be picked from the last
-candidate list the UI received, or typed as a rule when no server is
+candidate list dispatch received, or typed as a rule when no server is
 connected — which is the normal case when nothing is pending.
 
 ## Two repositories, no shared package
 
-The MCP server and the UI service live in separate repositories:
+The MCP server and dispatch service live in separate repositories:
 
 | Repository | Ships | Holds |
 |---|---|---|
 | `tmux-mcp` | npm package | the MCP server, the requests-directory fallback, the `grant` CLI, the WebSocket client |
-| `tmux-mcp-ui` | container image | the service: agent sockets, sign-in, the inbox, the pool, the React app |
+| `tmux-dispatch` | container image | the service: agent sockets, sign-in, the inbox, the pool, the React app |
 
 **No shared protocol package.** Each side declares its own message types.
 Publishing and versioning a third artifact for six message shapes costs more
@@ -139,7 +139,7 @@ What enforces it instead:
   the server falls back to the requests directory. It never half-speaks a
   protocol it does not know.
 - The message shapes are specified in `docs/protocol.md`, kept in this
-  repository and mirrored in the UI repository. Changing a message means
+  repository and mirrored in the dispatch repository. Changing a message means
   changing that document and the version in the same commit.
 - Both sides test against the same recorded fixtures, so drift within a major
   shows up as a failing test rather than a confusing runtime bug.
@@ -197,7 +197,7 @@ environment.
 secret is never pasted into a config file by hand:
 
 ```
-$ tmux-mcp ui-login --url https://tmux.example.com
+$ tmux-mcp dispatch-login --url https://tmux.example.com
 Open https://tmux.example.com/link and enter: WQ7F-2K9P
 Waiting… paired with frankhommers. Token stored in ~/.tmux-mcp/credentials.json
 ```
@@ -208,7 +208,7 @@ opaque and random, stored hashed on the server and `0600` on the host. The
 socket presents it as `Authorization: Bearer …` during the handshake.
 
 Every request a device sends belongs to that device's account, and an inbox
-only ever shows one account's requests. A device can be revoked from the UI,
+only ever shows one account's requests. A device can be revoked from dispatch,
 which drops its socket immediately.
 
 ## Deployment
@@ -217,7 +217,7 @@ One image, two auth modes, so the same service runs on a laptop and in public:
 
 | `AUTH_MODE` | Who may connect | For |
 |---|---|---|
-| `token` | anyone with `TMUX_MCP_UI_TOKEN` | a single user, on `127.0.0.1` |
+| `token` | anyone with `TMUX_MCP_DISPATCH_TOKEN` | a single user, on `127.0.0.1` |
 | `password` | whoever knows `ADMIN_PASSWORD` | one person, hosted |
 | `oidc` | accounts from the configured issuer, paired devices | several people, or an existing IdP |
 
@@ -226,8 +226,8 @@ adapter that answers "which account is this?" differs.
 
 ```yaml
 services:
-  tmux-mcp-ui:
-    image: ghcr.io/frankhommers/tmux-mcp-ui
+  tmux-dispatch:
+    image: ghcr.io/frankhommers/tmux-dispatch
     environment:
       # Pick one: OIDC_ISSUER for a provider, or ADMIN_PASSWORD for one prompt.
       PUBLIC_URL: https://tmux.example.com
@@ -238,9 +238,9 @@ services:
       # ADMIN_PASSWORD: "…"         # instead of OIDC_*: a single password prompt
       SESSION_SECRET: "…"
       DATABASE_PATH: /data/tmux-mcp.db
-    volumes: [tmux-mcp-ui:/data]
+    volumes: [tmux-dispatch:/data]
 volumes:
-  tmux-mcp-ui:
+  tmux-dispatch:
 ```
 
 TLS is terminated by whatever sits in front (Caddy, Traefik, the platform's
@@ -260,11 +260,11 @@ New MCP server flags:
 
 | Flag | Env | Default | Meaning |
 |---|---|---|---|
-| `--ui-url=<url>` | `TMUX_MCP_UI_URL` | — | Where to dial (`wss://…/agent`). Replaces the local daemon. |
-| `--ui-token=<token>` | `TMUX_MCP_UI_TOKEN` | from `credentials.json` | Device token, or the shared token in `token` mode. |
+| `--dispatch-url=<url>` | `TMUX_MCP_DISPATCH_URL` | — | Where to dial (`wss://…/agent`). Replaces the local daemon. |
+| `--dispatch-token=<token>` | `TMUX_MCP_DISPATCH_TOKEN` | from `credentials.json` | Device token, or the shared token in `token` mode. |
 
 `--ui` keeps its meaning for the host-local daemon and is mutually exclusive
-with `--ui-url`.
+with `--dispatch-url`.
 
 ## Watching a pane (parked)
 
@@ -274,9 +274,9 @@ to keep the door open.
 Read-only, and possible precisely because the host holds the connection: the
 container never reads pane content, the host sends it.
 
-The UI sends `watch` with a pane id while you are deciding on a request. The
+Dispatch sends `watch` with a pane id while you are deciding on a request. The
 server captures that pane (`capture-pane -p -e`, escapes intact) about twice a
-second, hashes the result and sends `pane-output` only when it changed. The UI
+second, hashes the result and sends `pane-output` only when it changed. Dispatch
 writes it into xterm.js. Sending `watch` with `null`, or closing the request,
 stops it.
 
@@ -285,7 +285,7 @@ request is pending — exactly when you want to see what a pane is doing before
 handing it over. It only covers panes the server already offers as candidates,
 so watching cannot see further than assigning could.
 
-Not interactive. Typing would mean the UI can send keystrokes into your panes,
+Not interactive. Typing would mean dispatch can send keystrokes into your panes,
 which is a different security decision and not this one.
 
 `@xterm/xterm` is a dependency of `ui/` only, so it never reaches the npm
@@ -321,11 +321,11 @@ package or a `npx tmux-mcp` start.
 
 ## Testing
 
-- Protocol: a fake UI (a WebSocket server in the test) drives the MCP server
+- Protocol: a fake dispatch (a WebSocket server in the test) drives the MCP server
   through request → candidates → answer, including `refresh` and `withdraw`.
-- Fallback: with no UI reachable, a request still lands in the requests dir and
+- Fallback: with no dispatch reachable, a request still lands in the requests dir and
   `tmux-mcp grant` still answers it.
-- Reconnect: the UI is stopped mid-request and restarted; the request is
+- Reconnect: dispatch is stopped mid-request and restarted; the request is
   re-offered and can still be answered.
 - Pool: a rule matches and auto-answers; a stale pane id does not match; a used
   entry is not offered twice; a window request is not matched by a pane entry.
@@ -351,13 +351,13 @@ In `tmux-mcp`:
 
 - `src/agent-socket.ts` (new) — the WebSocket client: dial, backoff, messages
 - `src/protocol.ts` (new) — this side's message types and `PROTOCOL_VERSION`
-- `src/index.ts` — `--ui-url`, `--ui-token`, dial on request, fall back to the
+- `src/index.ts` — `--dispatch-url`, `--dispatch-token`, dial on request, fall back to the
   file path
 - `docs/protocol.md` (new) — the wire contract
 - Removed: `src/ui/`, `src/cli-ui.ts`, `ui/`, `ui-dist/` — the local daemon
-  moves to the UI repository, where it becomes the service in `token` mode
+  moves to the dispatch repository, where it becomes the service in `token` mode
 
-In `tmux-mcp-ui`:
+In `tmux-dispatch`:
 
 - `server/` — agent sockets, browser SSE, auth adapters (`token`, `password`,
   `oidc`), device pairing, SQLite

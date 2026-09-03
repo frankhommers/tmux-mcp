@@ -112,29 +112,29 @@ and is not the server's own pane.
 A request is answered outside the agent's client — the agent is in none of
 these paths, so it cannot answer its own request:
 
-1. **The control UI** — a separate service, in its own repository:
-   [tmux-mcp-ui](https://github.com/frankhommers/tmux-mcp-ui). Point this
-   server at it with `--ui-url` and it dials out over a WebSocket, carrying
-   the pane candidates with it. The UI never runs tmux and mounts nothing,
+1. **The dispatch service** — a separate service, in its own repository:
+   [tmux-dispatch](https://github.com/frankhommers/tmux-dispatch). Point this
+   server at it with `--dispatch-url` and it dials out over a WebSocket, carrying
+   the pane candidates with it. Dispatch never runs tmux and mounts nothing,
    which is what makes hosting it possible — and because the connection is
    outbound, nothing on your machine listens and it works from behind any
    router.
 
-   Pair the machine once, then point the server at the UI:
+   Pair the machine once, then point the server at dispatch:
 
    ```bash
-   tmux-mcp ui-login --url https://tmux.example.com
+   tmux-mcp dispatch-login --url https://tmux.example.com
    # Open https://tmux.example.com/link and enter: WQ7F-2K9P
 
-   tmux-mcp --human-assigned --ui-url wss://tmux.example.com/agent
+   tmux-mcp --human-assigned --dispatch-url wss://tmux.example.com/agent
    ```
 
-   `ui-login` stores a device token in `~/.tmux-mcp/credentials.json` (mode
-   0600), which the server picks up by URL, so `--ui-token` is only needed for
-   a shared-token deployment. Revoke a machine from the UI and its socket
+   `dispatch-login` stores a device token in `~/.tmux-mcp/credentials.json` (mode
+   0600), which the server picks up by URL, so `--dispatch-token` is only needed for
+   a shared-token deployment. Revoke a machine from dispatch and its socket
    drops.
 
-   The socket is open only while a request is pending. If the UI is
+   The socket is open only while a request is pending. If dispatch is
    unreachable, refuses the connection, or speaks a different protocol major,
    the request still lands in the requests directory and the channels below
    answer it. See `docs/protocol.md` for the wire contract.
@@ -162,9 +162,9 @@ Nothing that answers a request can widen what an agent may touch.
 
 The hook is spawned once per request. It receives the request as JSON on stdin
 (`id`, `reason`, `kind`, `candidates[].id`, `candidates[].label`,
-`grantCommand`, and `uiUrl` when the control UI runs) plus
+`grantCommand`, and `dispatchUrl` when the dispatch service runs) plus
 `TMUX_MCP_REQUEST_ID`, `TMUX_MCP_REASON`, `TMUX_MCP_KIND`,
-`TMUX_MCP_REQUESTS_DIR` and `TMUX_MCP_UI_URL` in the environment. The
+`TMUX_MCP_REQUESTS_DIR` and `TMUX_MCP_DISPATCH_URL` in the environment. The
 candidates are a snapshot for display; the hook may name any pane that exists
 when it answers.
 

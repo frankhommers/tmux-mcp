@@ -112,7 +112,7 @@ const server = new McpServer({
 // Resolved in main(); the request-pane tool only runs after connect().
 let requestsDir = '';
 let assignHookPath: string | undefined;
-// The control UI, when one is configured. Null means every request is
+// The dispatch service, when one is configured. Null means every request is
 // answered through the requests directory and the grant CLI.
 let agentSocket: AgentSocket | null = null;
 const REQUEST_EXPIRY_MS = 30 * 60 * 1000;
@@ -138,11 +138,11 @@ async function notifyAttachedClients(request: PaneRequest): Promise<void> {
 }
 
 /**
- * Answer a request on behalf of the control UI. The UI can only name a
+ * Answer a request on behalf of the dispatch service. Dispatch can only name a
  * target; whether that target may be assigned is decided here, by the same
  * answerRequest() the CLI and the hooks go through.
  */
-async function answerFromUi(
+async function answerFromDispatch(
   id: string,
   answer: { target: string } | { deny: true; reason?: string }
 ): Promise<{ ok: true; target: string } | { ok: false; error: string }> {
@@ -1792,8 +1792,8 @@ async function main() {
         'human-assigned': { type: 'boolean', default: false },
         'assign-hook': { type: 'string' },
         'requests-dir': { type: 'string' },
-        'ui-url': { type: 'string' },
-        'ui-token': { type: 'string' }
+        'dispatch-url': { type: 'string' },
+        'dispatch-token': { type: 'string' }
       }
     });
 
@@ -1812,19 +1812,19 @@ async function main() {
     requestsDir = resolveRequestsDir(values['requests-dir'] as string | undefined);
     assignHookPath = (values['assign-hook'] as string | undefined) ?? process.env.TMUX_MCP_ASSIGN_HOOK;
 
-    const uiUrl = (values['ui-url'] as string | undefined) ?? process.env.TMUX_MCP_UI_URL;
-    if (humanAssigned && uiUrl) {
-      // An explicit token wins; otherwise use whatever `ui-login` stored for
+    const dispatchUrl = (values['dispatch-url'] as string | undefined) ?? process.env.TMUX_MCP_DISPATCH_URL;
+    if (humanAssigned && dispatchUrl) {
+      // An explicit token wins; otherwise use whatever `dispatch-login` stored for
       // this deployment, so a paired machine needs no flags at all.
-      const uiToken = (values['ui-token'] as string | undefined)
-        ?? process.env.TMUX_MCP_UI_TOKEN
-        ?? await tokenFor(uiUrl);
+      const dispatchToken = (values['dispatch-token'] as string | undefined)
+        ?? process.env.TMUX_MCP_DISPATCH_TOKEN
+        ?? await tokenFor(dispatchUrl);
       agentSocket = new AgentSocket({
-        url: uiUrl,
-        token: uiToken,
+        url: dispatchUrl,
+        token: dispatchToken,
         scope: getScopeMode(),
         clientVersion: 'tmux-mcp/0.2.3',
-        onAnswer: answerFromUi,
+        onAnswer: answerFromDispatch,
         onRefresh: async id => {
           const request = getRequest(id);
           if (!request) return [];

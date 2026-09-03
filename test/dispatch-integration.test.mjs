@@ -15,7 +15,7 @@ function resultText(result) {
   return result.content[0].text;
 }
 
-/** A stand-in control UI plus a real MCP server wired to it. */
+/** A stand-in dispatch service plus a real MCP server wired to it. */
 async function withServerAndUi(run, { behaviour, extraArgs = [] } = {}) {
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await new Promise(resolve => wss.once('listening', resolve));
@@ -35,15 +35,15 @@ async function withServerAndUi(run, { behaviour, extraArgs = [] } = {}) {
     });
   });
 
-  const requestsDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-uiint-'));
+  const requestsDir = await mkdtemp(join(tmpdir(), 'tmux-dispatchint-'));
   const client = new Client({ name: 'ui-integration', version: '1.0.0' });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [
       'build/index.js', '--human-assigned',
       `--requests-dir=${requestsDir}`,
-      `--ui-url=ws://127.0.0.1:${port}/agent`,
-      '--ui-token=device-token',
+      `--dispatch-url=ws://127.0.0.1:${port}/agent`,
+      '--dispatch-token=device-token',
       ...extraArgs,
     ],
     cwd: process.cwd(),
@@ -70,8 +70,8 @@ async function withServerAndUi(run, { behaviour, extraArgs = [] } = {}) {
   }
 }
 
-test('a request reaches the UI and an answer from it assigns the pane', async () => {
-  const sessionName = `tmux-mcp-uiint-${process.pid}-${randomUUID()}`;
+test('a request reaches dispatch and an answer from it assigns the pane', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
   const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
   try {
     await withServerAndUi(async ({ client, waitFor }) => {
@@ -102,8 +102,8 @@ test('a request reaches the UI and an answer from it assigns the pane', async ()
   }
 });
 
-test('a pane the UI names that does not exist is refused, and the request stays open', async () => {
-  const sessionName = `tmux-mcp-uiint-${process.pid}-${randomUUID()}`;
+test('a pane dispatch names that does not exist is refused, and the request stays open', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
   const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
   try {
     await withServerAndUi(async ({ client, waitFor, received }) => {
@@ -139,7 +139,7 @@ test('a pane the UI names that does not exist is refused, and the request stays 
 });
 
 test('refresh returns panes created after the request was made', async () => {
-  const sessionName = `tmux-mcp-uiint-${process.pid}-${randomUUID()}`;
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
   await executeTmux(['new-session', '-d', '-s', sessionName]);
   let latePane = null;
   try {
@@ -178,7 +178,7 @@ test('refresh returns panes created after the request was made', async () => {
 });
 
 test('the request still lands in the requests directory, so the CLI can answer it', async () => {
-  const sessionName = `tmux-mcp-uiint-${process.pid}-${randomUUID()}`;
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
   const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
   try {
     await withServerAndUi(async ({ client, requestsDir, waitFor }) => {
@@ -193,7 +193,7 @@ test('the request still lands in the requests directory, so the CLI can answer i
       const stored = JSON.parse(await readFile(join(requestsDir, `${id}.json`), 'utf8'));
       assert.equal(stored.reason, 'answered from the shell');
 
-      // The UI is connected but silent; the shell wins.
+      // Dispatch is connected but silent; the shell wins.
       await writeFile(join(requestsDir, `${id}.grant`), paneId, { mode: 0o600 });
 
       const granted = await pending;
@@ -205,17 +205,17 @@ test('the request still lands in the requests directory, so the CLI can answer i
   }
 });
 
-test('an unreachable UI does not stop a request from being answered', async () => {
-  const sessionName = `tmux-mcp-uiint-${process.pid}-${randomUUID()}`;
+test('an unreachable dispatch does not stop a request from being answered', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
   const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
-  const requestsDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-uiint-'));
+  const requestsDir = await mkdtemp(join(tmpdir(), 'tmux-dispatchint-'));
   const client = new Client({ name: 'ui-down', version: '1.0.0' });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [
       'build/index.js', '--human-assigned',
       `--requests-dir=${requestsDir}`,
-      '--ui-url=ws://127.0.0.1:1/agent',
+      '--dispatch-url=ws://127.0.0.1:1/agent',
     ],
     cwd: process.cwd(),
     stderr: 'pipe',

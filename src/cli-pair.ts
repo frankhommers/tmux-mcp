@@ -2,14 +2,14 @@ import { parseArgs } from 'node:util';
 import { credentialsPath, defaultDeviceName, storeToken } from './credentials.js';
 
 /**
- * `tmux-mcp ui-login` — device-code pairing.
+ * `tmux-mcp dispatch-login` — device-code pairing.
  *
  * The machine asks for a code, prints it, and waits while a human confirms it
  * in a browser they are already signed into. No secret is ever pasted by hand.
  */
 
-export function isPairCliCommand(value: string | undefined): value is 'ui-login' {
-  return value === 'ui-login';
+export function isPairCliCommand(value: string | undefined): value is 'dispatch-login' {
+  return value === 'dispatch-login';
 }
 
 function httpBase(url: string): string {
@@ -26,9 +26,9 @@ export async function runPairCli(argv: string[]): Promise<number> {
     },
   });
 
-  const rawUrl = (values.url as string | undefined) ?? process.env.TMUX_MCP_UI_URL;
+  const rawUrl = (values.url as string | undefined) ?? process.env.TMUX_MCP_DISPATCH_URL;
   if (!rawUrl) {
-    console.error('Usage: tmux-mcp ui-login --url https://tmux.example.com');
+    console.error('Usage: tmux-mcp dispatch-login --url https://tmux.example.com');
     return 1;
   }
   const base = httpBase(rawUrl);
@@ -43,7 +43,7 @@ export async function runPairCli(argv: string[]): Promise<number> {
       body: JSON.stringify({ name }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) throw new Error(`the control UI answered ${res.status}`);
+    if (!res.ok) throw new Error(`the dispatch service answered ${res.status}`);
     start = await res.json() as typeof start;
   } catch (error) {
     console.error(`Could not reach ${base}: ${(error as Error).message}`);
@@ -67,7 +67,7 @@ export async function runPairCli(argv: string[]): Promise<number> {
       if (claim.status === 'ready' && claim.token) {
         await storeToken(base, claim.token, path);
         console.log(`Paired as "${name}". Token stored in ${path}`);
-        console.log(`Start the server with: --ui-url=${rawUrl.includes('/agent') ? rawUrl : `${base.replace(/^http/, 'ws')}/agent`}`);
+        console.log(`Start the server with: --dispatch-url=${rawUrl.includes('/agent') ? rawUrl : `${base.replace(/^http/, 'ws')}/agent`}`);
         return 0;
       }
       if (claim.status === 'denied') {

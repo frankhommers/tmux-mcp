@@ -1,7 +1,7 @@
 /**
- * The wire contract with the control UI, specified in docs/protocol.md.
+ * The wire contract with the dispatch service, specified in docs/protocol.md.
  *
- * These types are declared again on the UI side. That duplication is
+ * These types are declared again on the dispatch side. That duplication is
  * deliberate: a published package for six message shapes costs more than it
  * saves, and the two sides are deployed independently anyway, so the contract
  * has to hold at runtime. PROTOCOL_VERSION is what enforces it.
@@ -32,7 +32,7 @@ export interface WireCandidate {
   label: string;
 }
 
-export type ServerToUi =
+export type ServerToDispatch =
   | { type: 'hello'; protocolVersion: string; agent: AgentIdentity }
   | {
       type: 'request';
@@ -48,7 +48,7 @@ export type ServerToUi =
   | { type: 'result'; id: string; ok: true; target: string }
   | { type: 'result'; id: string; ok: false; error: string };
 
-export type UiToServer =
+export type DispatchToServer =
   | { type: 'welcome'; protocolVersion: string; account?: string }
   | { type: 'refuse'; reason: 'protocol_version' | 'unauthorized'; protocolVersion?: string }
   | { type: 'answer'; id: string; target: string }
@@ -59,7 +59,7 @@ export type UiToServer =
  * Parse a frame defensively: it arrives from another process that may be a
  * different version, so anything unrecognised is dropped rather than trusted.
  */
-export function parseUiMessage(raw: string): UiToServer | null {
+export function parseDispatchMessage(raw: string): DispatchToServer | null {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -71,10 +71,10 @@ export function parseUiMessage(raw: string): UiToServer | null {
   switch (message.type) {
     case 'welcome':
     case 'refuse':
-      return message as UiToServer;
+      return message as DispatchToServer;
     case 'answer':
     case 'refresh':
-      return typeof message.id === 'string' ? (message as UiToServer) : null;
+      return typeof message.id === 'string' ? (message as DispatchToServer) : null;
     default:
       return null;
   }

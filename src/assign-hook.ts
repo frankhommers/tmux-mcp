@@ -18,7 +18,7 @@ export function spawnAssignHook(
   requestsDir: string,
   onAnswer: (answer: Answer) => void,
   log: (level: 'info' | 'warning', message: string) => void,
-  uiUrl?: string
+  dispatchUrl?: string
 ): () => void {
   const child = spawn(hookPath, [], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -28,7 +28,7 @@ export function spawnAssignHook(
       TMUX_MCP_REASON: request.reason,
       TMUX_MCP_KIND: request.kind,
       TMUX_MCP_REQUESTS_DIR: requestsDir,
-      TMUX_MCP_UI_URL: uiUrl ?? '',
+      TMUX_MCP_DISPATCH_URL: dispatchUrl ?? '',
     },
   });
 
@@ -38,7 +38,7 @@ export function spawnAssignHook(
     kind: request.kind,
     pid: process.pid,
     grantCommand: `tmux-mcp grant ${request.id} <target>`,
-    uiUrl,
+    dispatchUrl,
     candidates: request.candidates.map(c => ({ id: c.id, label: c.label })),
   };
 

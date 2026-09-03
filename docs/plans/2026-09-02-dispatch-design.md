@@ -1,8 +1,8 @@
-# Local control UI (`tmux-mcp ui`)
+# Local dispatch service (`tmux-mcp ui`)
 
 ## Goal
 
-One local web UI, shared by every tmux-mcp server on the machine, where a
+One local dispatch service, shared by every tmux-mcp server on the machine, where a
 human answers pane requests, manages tmux sessions, and peeks at pane
 contents. It **replaces** in-client prompting: MCP elicitation is removed
 from the server entirely, so there is one place where requests are answered
@@ -19,16 +19,16 @@ that; a modal snapshot cannot.
 The hard part is already built. `~/.tmux-mcp/requests/` is a shared bus:
 every human-assigned server writes `<id>.json` there and watches for
 `<id>.grant` / `<id>.deny`. Who writes those answers is irrelevant — the
-`tmux-mcp grant` CLI does it today. The UI is a second consumer of the same
+`tmux-mcp grant` CLI does it today. Dispatch is a second consumer of the same
 protocol, so no MCP-to-MCP coordination, IPC, or port negotiation is needed,
-and the UI keeps working across agent restarts.
+and dispatch keeps working across agent restarts.
 
 ## Non-goals
 
 - MCP elicitation. It is deleted, not made optional: keeping a second asking
   channel is what produced two prompts for one request, and its behaviour
   varies per client (some auto-decline what they cannot render, which would
-  silently kill a request). The remaining channels are the UI, the
+  silently kill a request). The remaining channels are dispatch, the
   `tmux-mcp grant` CLI, and an optional assign hook.
 - Typing into panes. The terminal view is read-only (see Terminal view).
   A web page that can `send-keys` is a shell on localhost; that is a
@@ -62,7 +62,7 @@ tmux-mcp ui --print-url     # print the URL with token, for bookmarking
 tmux-mcp ui --stop          # stop a running daemon
 ```
 
-Port: `--port` (default 7676, `TMUX_MCP_UI_PORT`). If the port is taken by a
+Port: `--port` (default 7676, `TMUX_MCP_DISPATCH_PORT`). If the port is taken by a
 daemon of ours (see health), that daemon is used and this one exits 0. If it
 is taken by anything else, bind an ephemeral port instead. The chosen port is
 always written to `ui.json`, so nothing depends on guessing it.
@@ -101,7 +101,7 @@ warning and falls back to the other channels.
   which is the realistic attack on a loopback service.
 - The trust boundary equals the requests directory: whoever can read
   `ui.json` can assign panes. Both are 0600 inside a 0700 directory.
-- **The UI is not scoped.** It is the human's own tool and shows all of tmux,
+- **Dispatch is not scoped.** It is the human's own tool and shows all of tmux,
   including panes no agent may touch. Assignment, however, stays inside the
   scope recorded in the request (see below).
 
@@ -111,7 +111,7 @@ Three ways to answer, none of which lives inside the agent's client:
 
 | Channel | Role |
 |---|---|
-| The UI | the normal path: see the request, refresh the live list, Assign or Deny |
+| Dispatch | the normal path: see the request, refresh the live list, Assign or Deny |
 | `tmux-mcp grant` / `deny` | headless and SSH; also the fallback when the daemon is not running |
 | assign hook | optional; mainly to *notify* you, but it may still answer by printing an id |
 
@@ -125,13 +125,13 @@ Nothing interrupts the agent's client any more, so notification has to carry
 that weight. On a new request:
 
 - the MCP server keeps its `tmux display-message` on every attached client
-  and its MCP log notification, both now including the UI URL for that
+  and its MCP log notification, both now including dispatch URL for that
   request;
-- the assign hook payload gains `uiUrl`, so `notify-only.sh` can put a
+- the assign hook payload gains `dispatchUrl`, so `notify-only.sh` can put a
   clickable link in the desktop notification;
 - the daemon itself notifies: `terminal-notifier` / `notify-send` when
   available, and the browser's Notification API for any open tab, so an
-  already-open UI surfaces the request without being watched.
+  already-open dispatch surfaces the request without being watched.
 
 None of these is required for correctness: an unnoticed request simply waits
 its 30 minutes, and `tmux-mcp requests` always shows what is pending.
@@ -158,7 +158,7 @@ JSON in, JSON out. Errors are `{ error: string }` with a 4xx/5xx status.
 `targets` is computed live on every call, and the page has a refresh button,
 so a pane opened after the request appears without the agent asking again.
 The MCP server re-validates the target when it picks up the answer file, so
-the UI cannot widen anyone's scope.
+dispatch cannot widen anyone's scope.
 
 **tmux (milestone 2)**
 
@@ -218,8 +218,8 @@ resize: the pane keeps whatever geometry tmux gave it, and the view sizes
 itself to that.
 
 `@xterm/xterm` becomes a regular dependency. It costs roughly a megabyte in
-every install, including installs that never start the UI — accepted so the
-UI works offline and needs no vendored blob in git.
+every install, including installs that never start dispatch — accepted so the
+dispatch works offline and needs no vendored blob in git.
 
 ## Milestones
 
@@ -247,7 +247,7 @@ Each milestone is independently useful and independently shippable.
 - tmux endpoints: against a throwaway session, as elsewhere in the suite.
 - No elicitation is ever sent, even to a client that advertises the
   capability — asserted against the real server over stdio.
-- Notifications: the hook payload carries `uiUrl`; the tmux message contains
+- Notifications: the hook payload carries `dispatchUrl`; the tmux message contains
   the request URL.
 
 ## Files
@@ -261,9 +261,9 @@ Each milestone is independently useful and independently shippable.
 - `src/cli-ui.ts` — the `ui` subcommand
 - `src/index.ts` — `--ui` flag, auto-spawn, elicitation wiring removed
 - `src/elicit-channel.ts`, `test/elicit-channel.test.mjs` — **deleted**
-- `src/assign-hook.ts` — `uiUrl` in the payload
+- `src/assign-hook.ts` — `dispatchUrl` in the payload
 - `package.json` — `@xterm/xterm`
-- `README.md`, `test-configs/` — documentation and a config that uses the UI
+- `README.md`, `test-configs/` — documentation and a config that uses dispatch
 
 ## Consequence to accept
 

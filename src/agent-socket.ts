@@ -2,19 +2,19 @@ import { hostname } from 'node:os';
 import {
   PROTOCOL_VERSION,
   isCompatible,
-  parseUiMessage,
+  parseDispatchMessage,
   type AgentIdentity,
-  type ServerToUi,
-  type UiToServer,
+  type ServerToDispatch,
+  type DispatchToServer,
   type WireCandidate,
 } from './protocol.js';
 
 /**
- * The MCP server's side of the control-UI connection.
+ * The MCP server's side of the dispatch connection.
  *
  * It dials out and holds the socket only while requests are open, so nothing
  * on this machine listens and an idle agent keeps no connection. Everything
- * tmux-shaped stays here: the UI is told what the candidates are and can only
+ * tmux-shaped stays here: dispatch is told what the candidates are and can only
  * name one back, which this side then validates.
  */
 
@@ -23,10 +23,10 @@ export interface AgentSocketOptions {
   token?: string;
   scope: string;
   clientVersion: string;
-  /** Called when the UI answers. Returns what became of that answer. */
+  /** Called when dispatch answers. Returns what became of that answer. */
   onAnswer: (id: string, answer: { target: string } | { deny: true; reason?: string })
     => Promise<{ ok: true; target: string } | { ok: false; error: string }>;
-  /** Called when the UI asks for a fresh candidate list. */
+  /** Called when dispatch asks for a fresh candidate list. */
   onRefresh: (id: string) => Promise<WireCandidate[]>;
   log: (level: 'info' | 'warning', message: string) => void;
   /** Test seam. */
@@ -58,23 +58,23 @@ export class AgentSocket {
   private backoff = BACKOFF_START_MS;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private handshaken = false;
-  /** Set when the UI refused us: retrying would just be refused again. */
+  /** Set when dispatch refused us: retrying would just be refused again. */
   private refused = false;
   private closing = false;
 
   constructor(private readonly options: AgentSocketOptions) {}
 
-  /** True once the UI has accepted the handshake. */
+  /** True once dispatch has accepted the handshake. */
   get connected(): boolean {
     return this.handshaken && this.socket?.readyState === 1;
   }
 
-  /** True when the UI told us to go away; the caller should use the file path. */
+  /** True when dispatch told us to go away; the caller should use the file path. */
   get givenUp(): boolean {
     return this.refused;
   }
 
-  /** Offer a request to the UI, connecting if this is the first one. */
+  /** Offer a request to dispatch, connecting if this is the first one. */
   offer(request: OpenRequest): void {
     if (this.refused) return;
     this.open.set(request.id, request);
@@ -82,7 +82,7 @@ export class AgentSocket {
     else this.ensureConnection();
   }
 
-  /** The request is settled or gone; tell the UI and drop the socket if idle. */
+  /** The request is settled or gone; tell dispatch and drop the socket if idle. */
   withdraw(id: string, why: 'expired' | 'answered_elsewhere' | 'shutdown'): void {
     if (!this.open.delete(id)) return;
     if (this.connected) this.send({ type: 'withdraw', id, why });
@@ -107,7 +107,7 @@ export class AgentSocket {
     };
   }
 
-  private send(message: ServerToUi): void {
+  private send(message: ServerToDispatch): void {
     try {
       this.socket?.send(JSON.stringify(message));
     } catch (error) {
@@ -123,7 +123,7 @@ export class AgentSocket {
     try {
       socket = connect(this.options.url, this.options.token);
     } catch (error) {
-      this.options.log('warning', `control UI unreachable: ${(error as Error).message}`);
+      this.options.log('warning', `dispatch service unreachable: ${(error as Error).message}`);
       this.scheduleRetry();
       return;
     }
@@ -135,7 +135,7 @@ export class AgentSocket {
     });
 
     socket.addEventListener('message', event => {
-      const message = parseUiMessage(typeof event.data === 'string' ? event.data : String(event.data));
+      const message = parseDispatchMessage(typeof event.data === 'string' ? event.data : String(event.data));
       if (message) void this.handle(message);
     });
 
@@ -148,17 +148,17 @@ export class AgentSocket {
       this.socket = null;
       this.handshaken = false;
       if (this.closing || this.refused || this.open.size === 0) return;
-      if (wasHandshaken) this.options.log('info', 'control UI connection lost, reconnecting');
+      if (wasHandshaken) this.options.log('info', 'dispatch service connection lost, reconnecting');
       this.scheduleRetry();
     });
   }
 
-  private async handle(message: UiToServer): Promise<void> {
+  private async handle(message: DispatchToServer): Promise<void> {
     switch (message.type) {
       case 'welcome': {
         if (!isCompatible(message.protocolVersion)) {
           this.giveUp(
-            `control UI speaks protocol ${message.protocolVersion}, this server speaks ${PROTOCOL_VERSION}; ` +
+            `dispatch service speaks protocol ${message.protocolVersion}, this server speaks ${PROTOCOL_VERSION}; ` +
             'update the older side. Falling back to `tmux-mcp grant`.'
           );
           return;
@@ -173,9 +173,9 @@ export class AgentSocket {
       case 'refuse': {
         this.giveUp(
           message.reason === 'protocol_version'
-            ? `control UI refused protocol ${PROTOCOL_VERSION} (it speaks ${message.protocolVersion ?? 'unknown'}). ` +
+            ? `dispatch service refused protocol ${PROTOCOL_VERSION} (it speaks ${message.protocolVersion ?? 'unknown'}). ` +
               'Falling back to `tmux-mcp grant`.'
-            : 'control UI refused this device. Pair it again, or use `tmux-mcp grant`.'
+            : 'dispatch service refused this device. Pair it again, or use `tmux-mcp grant`.'
         );
         return;
       }

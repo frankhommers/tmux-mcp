@@ -6,7 +6,7 @@ import { AgentSocket } from '../build/agent-socket.js';
 import { PROTOCOL_VERSION } from '../build/protocol.js';
 
 /**
- * A stand-in control UI. Records everything the agent sends and lets a test
+ * A stand-in dispatch service. Records everything the agent sends and lets a test
  * reply, so the agent's half of the protocol is exercised for real over a
  * socket rather than against a mock object.
  */
@@ -206,7 +206,7 @@ test('a different protocol major is refused and the agent gives up', async () =>
       agent.offer(REQUEST);
       const deadline = Date.now() + 4000;
       while (Date.now() < deadline && !agent.givenUp) await new Promise(r => setTimeout(r, 20));
-      assert.equal(agent.givenUp, true, 'the agent should stop using an incompatible UI');
+      assert.equal(agent.givenUp, true, 'the agent should stop using an incompatible dispatch');
       assert.ok(logs.some(([, msg]) => /protocol 2\.0/.test(msg) && /grant/.test(msg)));
     } finally {
       agent.stop();
@@ -255,7 +255,7 @@ test('withdrawing the last request closes the socket', async () => {
   });
 });
 
-test('an unreachable UI never throws and leaves the caller to fall back', async () => {
+test('an unreachable dispatch never throws and leaves the caller to fall back', async () => {
   const logs = [];
   const agent = new AgentSocket({
     url: 'ws://127.0.0.1:1/agent',

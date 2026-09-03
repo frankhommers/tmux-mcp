@@ -11,7 +11,7 @@ import { credentialKey, tokenFor, storeToken } from '../build/credentials.js';
 
 const run = promisify(execFile);
 
-/** A stand-in control UI that only implements the pairing endpoints. */
+/** A stand-in dispatch service that only implements the pairing endpoints. */
 async function withPairingServer(behaviour, run) {
   let approved = false;
   const server = createServer((req, res) => {
@@ -60,7 +60,7 @@ test('a stored token is found again by the url the server dials', async () => {
   assert.equal((await stat(path)).mode & 0o777, 0o600);
 });
 
-test('ui-login prints the code, waits, and stores the token it is given', async () => {
+test('dispatch-login prints the code, waits, and stores the token it is given', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tmux-mcp-cred-'));
   let polls = 0;
   await withPairingServer(() => {
@@ -69,7 +69,7 @@ test('ui-login prints the code, waits, and stores the token it is given', async 
     return polls < 2 ? { status: 'pending' } : { status: 'ready', token: 'device-token-abc' };
   }, async url => {
     const { stdout } = await run(process.execPath, [
-      'build/index.js', 'ui-login', `--url=${url}`, '--name=test-machine', `--state-dir=${dir}`,
+      'build/index.js', 'dispatch-login', `--url=${url}`, '--name=test-machine', `--state-dir=${dir}`,
     ], { cwd: process.cwd() });
 
     assert.match(stdout, /WQ7F-2K9P/);
@@ -85,7 +85,7 @@ test('a denied pairing fails cleanly', async () => {
   await withPairingServer(() => ({ status: 'denied' }), async url => {
     await assert.rejects(
       () => run(process.execPath, [
-        'build/index.js', 'ui-login', `--url=${url}`, `--state-dir=${dir}`,
+        'build/index.js', 'dispatch-login', `--url=${url}`, `--state-dir=${dir}`,
       ], { cwd: process.cwd() }),
       err => {
         assert.equal(err.code, 1);
@@ -96,11 +96,11 @@ test('a denied pairing fails cleanly', async () => {
   });
 });
 
-test('an unreachable control UI fails with the address named', async () => {
+test('an unreachable dispatch service fails with the address named', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tmux-mcp-cred-'));
   await assert.rejects(
     () => run(process.execPath, [
-      'build/index.js', 'ui-login', '--url=http://127.0.0.1:1', `--state-dir=${dir}`,
+      'build/index.js', 'dispatch-login', '--url=http://127.0.0.1:1', `--state-dir=${dir}`,
     ], { cwd: process.cwd() }),
     err => {
       assert.equal(err.code, 1);

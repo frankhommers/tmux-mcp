@@ -1,10 +1,10 @@
-# Agent ↔ control UI protocol
+# Agent ↔ dispatch service protocol
 
 The MCP server (on your machine, inside tmux's world) opens a WebSocket to the
-control UI service and keeps it open while it has a pending pane request. The
+dispatch service service and keeps it open while it has a pending pane request. The
 service never dials the MCP server, so nothing on your machine listens.
 
-This document is the contract. It is mirrored in the `tmux-mcp-ui`
+This document is the contract. It is mirrored in the `tmux-dispatch`
 repository; there is deliberately no shared package. Both sides declare their
 own types and agree at runtime through `PROTOCOL_VERSION`.
 
@@ -31,11 +31,11 @@ message type, or an optional field, is a minor bump.
 - On an unclean close while a request is open, the server reconnects with
   backoff (1s, 2s, 4s … capped at 30s) and re-sends its open requests.
 
-## Messages: server → UI
+## Messages: server → dispatch
 
 ### `hello`
 
-First message on every connection. The UI answers `welcome` or `refuse`.
+First message on every connection. Dispatch answers `welcome` or `refuse`.
 
 ```json
 {
@@ -94,7 +94,7 @@ The request is no longer answerable.
 
 ### `result`
 
-What became of an answer the UI sent. Sent for every `answer`, so the UI can
+What became of an answer dispatch sent. Sent for every `answer`, so dispatch can
 show that an assignment landed — or why it did not.
 
 ```json
@@ -104,7 +104,7 @@ show that an assignment landed — or why it did not.
 
 A rejected answer leaves the request open.
 
-## Messages: UI → server
+## Messages: dispatch → server
 
 ### `welcome`
 
@@ -135,9 +135,9 @@ path.
 { "type": "refresh", "id": "r-8f3k2a1c" }
 ```
 
-## What the UI cannot do
+## What dispatch cannot do
 
-Everything tmux-shaped stays on the MCP server. The UI can only name a target;
+Everything tmux-shaped stays on the MCP server. Dispatch can only name a target;
 the server checks that it exists right now, sits inside `--scope`, and is not
 the server's own pane. A compromised or buggy service can offer a bad answer
 and get a `result` with `ok: false`; it cannot widen what an agent may touch.

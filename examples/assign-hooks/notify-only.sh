@@ -9,8 +9,8 @@ set -eu
 
 request=$(cat)
 reason=${TMUX_MCP_REASON:-$(printf '%s' "$request" | sed -n 's/.*"reason": "\(.*\)",/\1/p')}
-# The UI url when the control UI runs, otherwise the grant command.
-body=${TMUX_MCP_UI_URL:-"tmux-mcp grant ${TMUX_MCP_REQUEST_ID:-<id>} <target>"}
+# The dispatch url when the dispatch service runs, otherwise the grant command.
+body=${TMUX_MCP_DISPATCH_URL:-"tmux-mcp grant ${TMUX_MCP_REQUEST_ID:-<id>} <target>"}
 
 if command -v terminal-notifier >/dev/null 2>&1; then
   terminal-notifier -title 'tmux-mcp' -subtitle "$reason" -message "$body" >/dev/null 2>&1 || true

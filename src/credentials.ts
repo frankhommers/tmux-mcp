@@ -3,14 +3,14 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
 /**
- * Device tokens, one per control UI.
+ * Device tokens, one per dispatch service.
  *
  * Kept out of the shell history and out of any config file a human edits: the
  * pairing flow writes them here, and the server reads them by URL.
  */
 
 export interface Credentials {
-  /** Keyed by the UI's base URL, so several deployments can coexist. */
+  /** Keyed by dispatch's base URL, so several deployments can coexist. */
   tokens: Record<string, string>;
 }
 

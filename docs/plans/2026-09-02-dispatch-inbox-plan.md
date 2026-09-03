@@ -1,4 +1,4 @@
-# Control UI — Milestone 1 (Inbox) Implementation Plan
+# Dispatch — Milestone 1 (Inbox) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -242,7 +242,7 @@ Expected: PASS, 6 tests.
 
 ```bash
 git add src/ui/state.ts test/ui-state.test.mjs
-git commit -m "feat: add control UI state file and spawn lock"
+git commit -m "feat: add dispatch service state file and spawn lock"
 ```
 
 ---
@@ -279,7 +279,7 @@ import test from 'node:test';
 import { startDaemon } from '../build/ui/daemon.js';
 
 async function withDaemon(run) {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const requestsDir = join(stateDir, 'requests');
   const daemon = await startDaemon({ stateDir, requestsDir, port: 0 });
   try {
@@ -344,7 +344,7 @@ test('a foreign Origin is refused', async () => {
 });
 
 test('the daemon writes its state file and removes it on close', async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const { readUiState } = await import('../build/ui/state.js');
   const daemon = await startDaemon({ stateDir, requestsDir: join(stateDir, 'requests'), port: 0 });
   const state = await readUiState(stateDir);
@@ -572,7 +572,7 @@ Expected: PASS, 8 tests.
 
 ```bash
 git add src/ui/daemon.ts test/ui-daemon.test.mjs
-git commit -m "feat: add control UI daemon with token auth"
+git commit -m "feat: add dispatch service daemon with token auth"
 ```
 
 ---
@@ -609,7 +609,7 @@ import { startDaemon } from '../build/ui/daemon.js';
 import { executeTmux } from '../build/tmux.js';
 
 async function withInbox(run) {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const requestsDir = join(stateDir, 'requests');
   await mkdir(requestsDir, { recursive: true, mode: 0o700 });
   const daemon = await startDaemon({ stateDir, requestsDir, port: 0 });
@@ -650,7 +650,7 @@ test('pending requests are listed with their reason and age', async () => {
 });
 
 test('targets are computed live, so a pane opened after the request shows up', async () => {
-  const sessionName = `tmux-mcp-ui-${process.pid}-${randomUUID()}`;
+  const sessionName = `tmux-dispatch-${process.pid}-${randomUUID()}`;
   await withInbox(async ({ api, requestsDir }) => {
     const id = await writeRequest(requestsDir);
     const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
@@ -665,7 +665,7 @@ test('targets are computed live, so a pane opened after the request shows up', a
 });
 
 test('a target outside the recorded scope is not offered and cannot be granted', async () => {
-  const sessionName = `tmux-mcp-ui-${process.pid}-${randomUUID()}`;
+  const sessionName = `tmux-dispatch-${process.pid}-${randomUUID()}`;
   await withInbox(async ({ api, requestsDir }) => {
     const id = await writeRequest(requestsDir, {
       scope: { mode: 'window', sessionIds: [], windowId: '@999999', excludedPaneId: null },
@@ -688,7 +688,7 @@ test('a target outside the recorded scope is not offered and cannot be granted',
 });
 
 test('granting writes the answer file the MCP server watches for', async () => {
-  const sessionName = `tmux-mcp-ui-${process.pid}-${randomUUID()}`;
+  const sessionName = `tmux-dispatch-${process.pid}-${randomUUID()}`;
   await withInbox(async ({ api, requestsDir }) => {
     const id = await writeRequest(requestsDir);
     const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
@@ -845,7 +845,7 @@ Expected: PASS, 6 tests.
 
 ```bash
 git add src/ui/api-requests.ts src/ui/daemon.ts src/cli-grant.ts test/ui-requests.test.mjs
-git commit -m "feat: serve pane requests and live targets from the control UI"
+git commit -m "feat: serve pane requests and live targets from the dispatch service"
 ```
 
 ---
@@ -880,7 +880,7 @@ import test from 'node:test';
 import { startDaemon } from '../build/ui/daemon.js';
 
 test('an arriving request is pushed to a connected client', async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const requestsDir = join(stateDir, 'requests');
   await mkdir(requestsDir, { recursive: true, mode: 0o700 });
   const daemon = await startDaemon({ stateDir, requestsDir, port: 0 });
@@ -923,7 +923,7 @@ test('an arriving request is pushed to a connected client', async () => {
 });
 
 test('the event stream needs a token', async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const daemon = await startDaemon({ stateDir, requestsDir: join(stateDir, 'requests'), port: 0 });
   try {
     const res = await fetch(`${daemon.url}/events`);
@@ -1119,7 +1119,7 @@ import { ensureDaemonRunning, probeDaemon } from '../build/cli-ui.js';
 const run = promisify(execFile);
 
 test('print-url reports nothing when no daemon runs', async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const { stdout } = await run(process.execPath, [
     'build/index.js', 'ui', '--print-url', `--state-dir=${stateDir}`,
   ], { cwd: process.cwd() });
@@ -1127,7 +1127,7 @@ test('print-url reports nothing when no daemon runs', async () => {
 });
 
 test('a state file with a dead pid does not count as running', async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   await writeUiState(stateDir, {
     pid: 2_147_483_646, port: 1, token: 'x'.repeat(32), startedAt: Date.now(), version: '0.0.0',
   });
@@ -1135,7 +1135,7 @@ test('a state file with a dead pid does not count as running', async () => {
 });
 
 test('ensureDaemonRunning spawns one daemon, and reuses it afterwards', async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const requestsDir = join(stateDir, 'requests');
 
   const first = await ensureDaemonRunning(stateDir, requestsDir);
@@ -1158,7 +1158,7 @@ test('ensureDaemonRunning spawns one daemon, and reuses it afterwards', async ()
 });
 
 test('two concurrent ensureDaemonRunning calls produce one daemon', async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const requestsDir = join(stateDir, 'requests');
   try {
     const [a, b] = await Promise.all([
@@ -1233,7 +1233,7 @@ async function waitForState(stateDir: string, timeoutMs: number): Promise<UiStat
 /**
  * Make sure exactly one daemon is running, spawning it if needed. Returns the
  * live state, or null when it could not be started — never throws, because a
- * missing UI must not stop an MCP server from serving.
+ * missing dispatch must not stop an MCP server from serving.
  */
 export async function ensureDaemonRunning(stateDir: string, requestsDir: string): Promise<UiState | null> {
   const existing = await readUiState(stateDir);
@@ -1281,13 +1281,13 @@ export async function runUiCli(argv: string[]): Promise<number> {
       console.log(daemonUrl(state!));
       return 0;
     }
-    console.log('The control UI is not running. Start it with: tmux-mcp ui');
+    console.log('The dispatch service is not running. Start it with: tmux-mcp ui');
     return 1;
   }
 
   if (values.stop) {
     if (!state) {
-      console.log('The control UI is not running.');
+      console.log('The dispatch service is not running.');
       return 0;
     }
     try { process.kill(state.pid, 'SIGTERM'); } catch { /* already gone */ }
@@ -1296,7 +1296,7 @@ export async function runUiCli(argv: string[]): Promise<number> {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     await clearUiState(stateDir);
-    console.log('Stopped the control UI.');
+    console.log('Stopped the dispatch service.');
     return 0;
   }
 
@@ -1306,7 +1306,7 @@ export async function runUiCli(argv: string[]): Promise<number> {
   }
   if (state) await clearUiState(stateDir);
 
-  const portRaw = (values.port as string | undefined) ?? process.env.TMUX_MCP_UI_PORT;
+  const portRaw = (values.port as string | undefined) ?? process.env.TMUX_MCP_DISPATCH_PORT;
   const port = portRaw === undefined ? 7676 : Number(portRaw);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     console.error(`Invalid --port: '${portRaw}'.`);
@@ -1326,7 +1326,7 @@ export async function runUiCli(argv: string[]): Promise<number> {
   process.once('SIGINT', shutdown);
 
   if (!values.detached) {
-    console.log(`Control UI: http://127.0.0.1:${daemon.port}/?t=${daemon.token}`);
+    console.log(`Dispatch: http://127.0.0.1:${daemon.port}/?t=${daemon.token}`);
     console.log('Stop it with: tmux-mcp ui --stop');
   }
   // Resolve only when the daemon stops, so the foreground command blocks.
@@ -1396,7 +1396,7 @@ import test from 'node:test';
 import { startDaemon } from '../build/ui/daemon.js';
 
 async function withDaemon(run) {
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const daemon = await startDaemon({ stateDir, requestsDir: join(stateDir, 'requests'), port: 0 });
   try {
     await run(daemon);
@@ -1713,7 +1713,7 @@ Expected: PASS, 4 tests.
 
 ```bash
 git add src/ui/public src/ui/static.ts src/ui/daemon.ts package.json test/ui-page.test.mjs
-git commit -m "feat: serve the control UI page"
+git commit -m "feat: serve the dispatch service page"
 ```
 
 ---
@@ -1725,7 +1725,7 @@ The MCP-side change: no in-client prompting at all, the daemon started on demand
 **Files:**
 - Delete: `src/elicit-channel.ts`, `test/elicit-channel.test.mjs`
 - Modify: `src/index.ts` (drop elicitation, add `--ui`, put the URL in notifications)
-- Modify: `src/assign-hook.ts` (`uiUrl` in the payload)
+- Modify: `src/assign-hook.ts` (`dispatchUrl` in the payload)
 - Test: `test/human-assigned.test.mjs` (extend), `test/assign-hook.test.mjs` (extend)
 
 **Interfaces:**
@@ -1778,7 +1778,7 @@ test('no elicitation is sent, even to a client that supports it', async () => {
 test('--ui starts a daemon and puts its request URL in the log notification', async () => {
   const sessionName = `tmux-mcp-ha-${process.pid}-${randomUUID()}`;
   await executeTmux(['new-session', '-d', '-s', sessionName]);
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-ui-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-dispatch-'));
   const requestsDir = join(stateDir, 'requests');
 
   const client = new Client({ name: 'ui-flag-test', version: '1.0.0' }, { capabilities: { logging: {} } });
@@ -1795,7 +1795,7 @@ test('--ui starts a daemon and puts its request URL in the log notification', as
 
   try {
     await client.connect(transport);
-    await client.callTool({ name: 'request-pane', arguments: { reason: 'look at the UI', timeoutSeconds: 2 } });
+    await client.callTool({ name: 'request-pane', arguments: { reason: 'look at dispatch', timeoutSeconds: 2 } });
     assert.ok(
       logs.some(line => /http:\/\/127\.0\.0\.1:\d+\/r\/r-[a-z0-9]+/.test(line)),
       `expected a request URL in the log notifications, got: ${JSON.stringify(logs)}`
@@ -1819,7 +1819,7 @@ const execFileAsync = promisify(execFile);
 Append to `test/assign-hook.test.mjs`:
 
 ```javascript
-test('the hook payload carries the UI url when one is given', async () => {
+test('the hook payload carries the dispatch url when one is given', async () => {
   const path = await hookScript('cat | grep -q "http://127.0.0.1:7676/r/r-abc123" && echo "%3"');
   const answer = await new Promise(resolve => {
     const kill = spawnAssignHook(path, REQUEST, '/tmp', a => resolve(a), () => {}, 'http://127.0.0.1:7676/r/r-abc123');
@@ -1854,15 +1854,15 @@ Remove the import line `import { clientSupportsElicitation, startElicitation } f
           }
 ```
 
-Add the UI flag next to the other module-load peeks (after `humanAssigned`):
+Add dispatch flag next to the other module-load peeks (after `humanAssigned`):
 
 ```typescript
-// Whether to run the local control UI. Peeked at module load so the
+// Whether to run the local dispatch service. Peeked at module load so the
 // request-pane description can mention it.
 const uiEnabled: boolean = (() => {
   const argv = process.argv.slice(2);
   if (argv.includes('--ui')) return true;
-  const env = process.env.TMUX_MCP_UI;
+  const env = process.env.TMUX_MCP_DISPATCH;
   return env === '1' || env === 'true';
 })();
 ```
@@ -1872,7 +1872,7 @@ Add module state and a helper next to `requestsDir`:
 ```typescript
 let uiState: import('./ui/state.js').UiState | null = null;
 
-/** Deep link to one request in the control UI, when it is running. */
+/** Deep link to one request in the dispatch service, when it is running. */
 function requestUrl(requestId: string): string | undefined {
   if (!uiState) return undefined;
   return `http://127.0.0.1:${uiState.port}/r/${requestId}?t=${uiState.token}`;
@@ -1884,9 +1884,9 @@ Extend `parseArgs` options with `'ui': { type: 'boolean', default: false }` and 
 ```typescript
     if (humanAssigned && uiEnabled) {
       const stateDir = resolveStateDir(values['state-dir'] as string | undefined);
-      // Never fatal: without the UI, the grant CLI still answers requests.
+      // Never fatal: without dispatch, the grant CLI still answers requests.
       uiState = await ensureDaemonRunning(stateDir, requestsDir);
-      if (!uiState) console.error('[tmux-mcp] could not start the control UI; use `tmux-mcp grant` instead');
+      if (!uiState) console.error('[tmux-mcp] could not start the dispatch service; use `tmux-mcp grant` instead');
     }
 ```
 
@@ -1929,7 +1929,7 @@ export function spawnAssignHook(
   requestsDir: string,
   onAnswer: (answer: Answer) => void,
   log: (level: 'info' | 'warning', message: string) => void,
-  uiUrl?: string
+  dispatchUrl?: string
 ): () => void {
 ```
 
@@ -1942,7 +1942,7 @@ and add it to the payload:
     kind: request.kind,
     pid: process.pid,
     grantCommand: `tmux-mcp grant ${request.id} <target>`,
-    uiUrl,
+    dispatchUrl,
     candidates: request.candidates.map(c => ({ id: c.id, label: c.label })),
   };
 ```
@@ -1950,7 +1950,7 @@ and add it to the payload:
 plus the env var beside the others:
 
 ```typescript
-      TMUX_MCP_UI_URL: uiUrl ?? '',
+      TMUX_MCP_DISPATCH_URL: dispatchUrl ?? '',
 ```
 
 At the hook call site in `src/index.ts`, pass it:
@@ -1970,7 +1970,7 @@ Expected: PASS.
 
 ```bash
 git add -A
-git commit -m "feat: replace elicitation with the control UI"
+git commit -m "feat: replace elicitation with the dispatch service"
 ```
 
 ---
@@ -1979,18 +1979,18 @@ git commit -m "feat: replace elicitation with the control UI"
 
 **Files:**
 - Modify: `README.md`, `test-configs/.mcp.json`, `test-configs/README.md`
-- Modify: `examples/assign-hooks/notify-only.sh` (use `TMUX_MCP_UI_URL`)
+- Modify: `examples/assign-hooks/notify-only.sh` (use `TMUX_MCP_DISPATCH_URL`)
 
 **Interfaces:**
 - Consumes: everything.
 - Produces: nothing importable.
 
-- [ ] **Step 1: Update the notify-only hook to link to the UI**
+- [ ] **Step 1: Update the notify-only hook to link to dispatch**
 
 Replace the `body=` line in `examples/assign-hooks/notify-only.sh`:
 
 ```bash
-body=${TMUX_MCP_UI_URL:-"tmux-mcp grant ${TMUX_MCP_REQUEST_ID} <target>"}
+body=${TMUX_MCP_DISPATCH_URL:-"tmux-mcp grant ${TMUX_MCP_REQUEST_ID} <target>"}
 ```
 
 - [ ] **Step 2: Rewrite the README's channel section**
@@ -2001,7 +2001,7 @@ In `README.md`, replace the numbered list of three channels (elicitation, CLI, h
 A request is answered outside the agent's client — the agent is in none of
 these paths, so it cannot answer its own request:
 
-1. **The control UI** — `--ui` starts a local web server (one per machine,
+1. **The dispatch service** — `--ui` starts a local web server (one per machine,
    shared by every tmux-mcp process) at `http://127.0.0.1:7676`. It lists
    pending requests with a **live** target list: a pane you open after
    reading the request is assignable, which a snapshot prompt could never do.
@@ -2028,9 +2028,9 @@ client showed a list frozen at the moment the agent asked, behaved
 differently per client, and produced a second prompt whenever a hook was also
 configured.
 
-The UI binds to `127.0.0.1` only and requires the token from
+Dispatch binds to `127.0.0.1` only and requires the token from
 `~/.tmux-mcp/ui.json` (mode 0600). Whoever can read that file can assign
-panes, exactly like whoever can write to the requests directory. The UI
+panes, exactly like whoever can write to the requests directory. Dispatch
 itself is **not** scope-restricted: it is your tool and shows all of tmux.
 Assignment still respects the scope recorded in each request.
 ````
@@ -2038,12 +2038,12 @@ Assignment still respects the scope recorded in each request.
 Add the flags to the options table:
 
 ```markdown
-| `--ui` | `TMUX_MCP_UI` | off | Start/reuse the local control UI and link to it in notifications |
+| `--ui` | `TMUX_MCP_DISPATCH` | off | Start/reuse the local dispatch service and link to it in notifications |
 | `--state-dir=<path>` | `TMUX_MCP_STATE_DIR` | `~/.tmux-mcp` | Where `ui.json` lives |
-| `--port=<n>` (on `tmux-mcp ui`) | `TMUX_MCP_UI_PORT` | `7676` | Falls back to an ephemeral port when taken |
+| `--port=<n>` (on `tmux-mcp ui`) | `TMUX_MCP_DISPATCH_PORT` | `7676` | Falls back to an ephemeral port when taken |
 ```
 
-- [ ] **Step 3: Switch the test config to the UI**
+- [ ] **Step 3: Switch the test config to dispatch**
 
 Replace `test-configs/.mcp.json` with (absolute paths, as before):
 
@@ -2066,7 +2066,7 @@ Replace `test-configs/.mcp.json` with (absolute paths, as before):
 
 Add `test-configs/state/` to `.gitignore`.
 
-In `test-configs/README.md`, replace the macOS-dialog section with a control-UI
+In `test-configs/README.md`, replace the macOS-dialog section with a dispatch
 section: `cd test-configs && claude`, the daemon starts by itself, the URL comes
 from `node build/index.js ui --print-url --state-dir=test-configs/state`, and
 the thing to try is opening a pane *after* the request and assigning it from
@@ -2087,7 +2087,7 @@ Expected: `no stray daemons`.
 
 ```bash
 git add -A
-git commit -m "docs: document the control UI and use it in the test config"
+git commit -m "docs: document the dispatch service and use it in the test config"
 ```
 
 ---
@@ -2112,7 +2112,7 @@ Spec coverage against `docs/plans/2026-09-02-control-ui-design.md` (milestone 1 
 | Pages `/` and `/r/<id>`, no framework | 6 |
 | Browser notification for an open tab | 6 |
 | Elicitation deleted | 7 |
-| Notifications carrying the request URL (tmux, MCP log, hook `uiUrl`) | 7, 8 |
+| Notifications carrying the request URL (tmux, MCP log, hook `dispatchUrl`) | 7, 8 |
 | Documentation, test config | 8 |
 
 Deferred to later milestones by design: `tmux-changed` SSE and every
