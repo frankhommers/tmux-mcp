@@ -118,22 +118,35 @@ The pool is edited from the same page. Panes can be picked from the last
 candidate list the UI received, or typed as a rule when no server is
 connected — which is the normal case when nothing is pending.
 
-## One repository, two artifacts
+## Two repositories, no shared package
 
-The repo is not split. The MCP server and the UI ship separately — an npm
-package and a container image — but they share `src/ui/protocol.ts`, and every
-new message touches both ends at once. Splitting would turn that into two pull
-requests and a published types package, or into types that quietly drift. The
-isolation that matters is already there: `ui/` has its own `package.json` and
-its own `node_modules`, so the npm package carries none of it.
+The MCP server and the UI service live in separate repositories:
 
-Because the two are *deployed* separately, they will run out of step whatever
-the repo layout. `hello` therefore carries a protocol version:
+| Repository | Ships | Holds |
+|---|---|---|
+| `tmux-mcp` | npm package | the MCP server, the requests-directory fallback, the `grant` CLI, the WebSocket client |
+| `tmux-mcp-ui` | container image | the service: agent sockets, sign-in, the inbox, the pool, the React app |
 
-- Same major: connect.
-- Different major: the UI shows which side is behind and how to update it, and
+**No shared protocol package.** Each side declares its own message types.
+Publishing and versioning a third artifact for six message shapes costs more
+than it saves, and the sides are already deployed independently, so the
+contract has to hold at runtime anyway.
+
+What enforces it instead:
+
+- `PROTOCOL_VERSION` is a constant on both sides, and `hello` carries it.
+  Equal majors connect; different majors refuse, say which side is behind, and
   the server falls back to the requests directory. It never half-speaks a
   protocol it does not know.
+- The message shapes are specified in `docs/protocol.md`, kept in this
+  repository and mirrored in the UI repository. Changing a message means
+  changing that document and the version in the same commit.
+- Both sides test against the same recorded fixtures, so drift within a major
+  shows up as a failing test rather than a confusing runtime bug.
+
+The honest cost of skipping the package: nothing mechanically prevents the two
+type declarations from diverging inside a major version. The fixtures are the
+guard, and they are only as good as the cases they cover.
 
 ## Authentication
 
@@ -334,16 +347,23 @@ package or a `npx tmux-mcp` start.
 
 ## Files
 
-- `src/ui/agent-socket.ts` (new) — the server side of the WebSocket: dial,
-  backoff, message handling
-- `src/ui/protocol.ts` (new) — message types shared by both ends
+In `tmux-mcp`:
+
+- `src/agent-socket.ts` (new) — the WebSocket client: dial, backoff, messages
+- `src/protocol.ts` (new) — this side's message types and `PROTOCOL_VERSION`
 - `src/index.ts` — `--ui-url`, `--ui-token`, dial on request, fall back to the
   file path
-- `ui/server/` (new) — the service: agent sockets, browser SSE, auth adapters
-  (`token`, `password`, `oidc`), device pairing, SQLite
-- `ui/src/` — pool editing, auto-assignment feedback, sign-in
-- `Dockerfile`, `docker-compose.yml` (new)
-- `README.md` — deployment and the two ways to run the UI
+- `docs/protocol.md` (new) — the wire contract
+- Removed: `src/ui/`, `src/cli-ui.ts`, `ui/`, `ui-dist/` — the local daemon
+  moves to the UI repository, where it becomes the service in `token` mode
+
+In `tmux-mcp-ui`:
+
+- `server/` — agent sockets, browser SSE, auth adapters (`token`, `password`,
+  `oidc`), device pairing, SQLite
+- `src/` — the React app, plus pool editing and sign-in
+- `Dockerfile`, `docker-compose.yml`
+- `docs/protocol.md` — the same contract, mirrored
 
 ## Milestones
 
