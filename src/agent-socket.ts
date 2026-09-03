@@ -203,7 +203,10 @@ export class AgentSocket {
   }
 
   private ensureConnection(): void {
-    if (this.socket || this.refused || this.closing) return;
+    if (this.refused || this.closing) return;
+    // A socket that is closing cannot carry anything any more, and its close
+    // event has not run yet. Dial past it rather than wait on a dead line.
+    if (this.socket && this.socket.readyState <= 1) return;
 
     const connect = this.options.connect ?? defaultConnect;
     let socket: WebSocket;
@@ -231,6 +234,8 @@ export class AgentSocket {
     });
 
     socket.addEventListener('close', () => {
+      // A newer socket may already have taken over; its state is not ours to clear.
+      if (this.socket !== socket) return;
       const wasHandshaken = this.handshaken;
       this.socket = null;
       this.handshaken = false;

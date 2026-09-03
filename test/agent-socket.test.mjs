@@ -511,3 +511,32 @@ test('a server that shuts down says it holds nothing any more', async () => {
     assert.deepEqual(last?.grants, [], 'dispatch should not keep showing a dead process\'s pane');
   });
 });
+
+test('a check still gets through when the previous socket is only just closing', async () => {
+  await withFakeUi(
+    (socket, message) => {
+      if (message.type === 'hello') {
+        socket.send(JSON.stringify({ type: 'welcome', protocolVersion: PROTOCOL_VERSION }));
+      }
+      if (message.type === 'check') {
+        socket.send(JSON.stringify({ type: 'verdict', id: message.id, allowed: false }));
+      }
+    },
+    async ui => {
+      const agent = makeAgent(ui.url, { listGrants: () => [], confirmTimeoutMs: 1000 });
+      try {
+        agent.offer(REQUEST);
+        await ui.waitFor('request');
+
+        // Settling the last request hangs up. Acting straight afterwards is the
+        // normal case, and the old socket's farewell must not swallow the new one.
+        agent.withdraw(REQUEST.id, 'answered_elsewhere');
+        const allowed = await agent.confirm('%3');
+
+        assert.equal(allowed, false, 'dispatch said no; falling back to the local grant loses a revocation');
+      } finally {
+        agent.stop();
+      }
+    }
+  );
+});
