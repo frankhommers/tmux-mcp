@@ -5,7 +5,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as tmux from "./tmux.js";
-import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId, ensureScopeResolved, initHumanAssigned, isHumanAssigned, isVisibleInScope } from "./scope.js";
+import { initScope, assertInScope, setActionConfirmer, isScopeActive, isInScope, isWindowScope, getScopeMode, initExcludeSelf, isExcludedPane, getExcludedPaneId, getSelfPaneId, ensureScopeResolved, initHumanAssigned, isHumanAssigned, isVisibleInScope } from "./scope.js";
 import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
@@ -1859,6 +1859,8 @@ async function main() {
         },
         log: logToClient,
       });
+      // Ask dispatch right before an action, so a revocation lands at once.
+      setActionConfirmer(id => agentSocket!.confirm(id));
     }
 
 

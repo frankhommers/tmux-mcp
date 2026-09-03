@@ -273,3 +273,37 @@ test('once a pane is assigned, the server reports it as a grant', async () => {
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });
+
+test('a pane dispatch has since revoked is refused at the next action', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
+  const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+  let stillAllowed = true;
+  try {
+    await withServerAndUi(async ({ client }) => {
+      const granted = await client.callTool({
+        name: 'request-pane',
+        arguments: { reason: 'then take it back', timeoutSeconds: 20 },
+      });
+      assert.match(resultText(granted), /^Status: granted$/m);
+
+      const ok = await client.callTool({ name: 'capture-pane', arguments: { paneId } });
+      assert.ok(!resultText(ok).includes('Access denied'), 'while allowed, the pane works');
+
+      stillAllowed = false;
+      const denied = await client.callTool({ name: 'capture-pane', arguments: { paneId } });
+      assert.match(resultText(denied), /Access denied/,
+        'once dispatch says no, the very next action must be refused');
+    }, {
+      behaviour: (socket, message) => {
+        if (message.type === 'request') {
+          socket.send(JSON.stringify({ type: 'answer', id: message.id, target: paneId }));
+        }
+        if (message.type === 'check') {
+          socket.send(JSON.stringify({ type: 'verdict', id: message.id, allowed: stillAllowed }));
+        }
+      },
+    });
+  } finally {
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});

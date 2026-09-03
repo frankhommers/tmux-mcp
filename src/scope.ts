@@ -183,10 +183,26 @@ async function isInStaticScope(id: string, type: 'pane' | 'window' | 'session'):
 /**
  * Assert a resource is in scope. Throws if not.
  */
+/**
+ * Asked immediately before an action, so a human who takes a pane back in
+ * dispatch is obeyed at the next action rather than at the next reconnect.
+ * Listings do not go through here: they are local and must stay cheap.
+ */
+type ActionConfirmer = (id: string, type: 'pane' | 'window' | 'session') => Promise<boolean>;
+
+let confirmAction: ActionConfirmer | null = null;
+
+export function setActionConfirmer(confirmer: ActionConfirmer | null): void {
+  confirmAction = confirmer;
+}
+
 export async function assertInScope(id: string, type: 'pane' | 'window' | 'session'): Promise<void> {
   if (!(await isInScope(id, type))) {
     const scopeLabel = scopeMode === 'window' ? 'window' : 'session';
     throw new Error(`Access denied: ${type} ${id} is not in the allowed ${scopeLabel} scope.`);
+  }
+  if (humanAssigned && confirmAction && !(await confirmAction(id, type))) {
+    throw new Error(`Access denied: ${type} ${id} was taken back.`);
   }
 }
 
