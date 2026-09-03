@@ -10,7 +10,7 @@ own types and agree at runtime through `PROTOCOL_VERSION`.
 
 ## Version
 
-`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.1`**.
+`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.2`**.
 
 - Equal majors connect. A higher minor on either side is fine: unknown
   message types and unknown fields are ignored.
@@ -41,7 +41,7 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 ```json
 {
   "type": "hello",
-  "protocolVersion": "1.1",
+  "protocolVersion": "1.2",
   "agent": {
     "instanceId": "0f0d8f6c-6a1f-4a3e-9a02-2b0e2f9a1d77",
     "pid": 4711,
@@ -115,13 +115,20 @@ A rejected answer leaves the request open.
 Everything this server currently holds, sent after every handshake and again
 whenever a grant is added or taken away. It is a full list, not a delta: the
 last one received is the truth, so a restarted dispatch relearns the state
-from the next report.
+from the next report. `reason` is why the pane was asked for; it outlives the
+request, which is gone once answered.
 
 ```json
 {
   "type": "grants",
   "grants": [
-    { "target": "%3", "kind": "pane", "label": "%3  main:code.1  zsh", "since": 1737000000000 }
+    {
+      "target": "%3",
+      "kind": "pane",
+      "label": "%3  main:code.1  zsh",
+      "since": 1737000000000,
+      "reason": "run the test suite"
+    }
   ]
 }
 ```
@@ -141,7 +148,7 @@ own grant, so a slow or absent dispatch cannot block work.
 ### `welcome`
 
 ```json
-{ "type": "welcome", "protocolVersion": "1.1", "account": "frankhommers" }
+{ "type": "welcome", "protocolVersion": "1.2", "account": "frankhommers" }
 ```
 
 ### `refuse`
