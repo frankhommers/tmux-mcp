@@ -137,7 +137,19 @@ the repo layout. `hello` therefore carries a protocol version:
 
 ## Authentication
 
-Two audiences, two mechanisms, one account.
+Two audiences — a human in a browser, a machine on a socket — and one account
+behind both.
+
+How the human signs in is chosen by what is configured, so a deployment has
+one knob fewer:
+
+| Configured | Sign-in | For |
+|---|---|---|
+| `OIDC_ISSUER` | OIDC, any compliant provider | several people, or an existing identity provider |
+| `ADMIN_PASSWORD` | one password prompt | one person, hosted, without running an IdP |
+| neither | the token in the URL | localhost |
+
+`AUTH_MODE` overrides the detection when a deployment wants to be explicit.
 
 **The human, in a browser: OIDC.** Discovery plus authorization code with
 PKCE, so any compliant provider works — Google, Keycloak, Authentik, Zitadel,
@@ -155,6 +167,18 @@ behind an OIDC provider.
 Who may sign in is the issuer's business, with one optional guard:
 `OIDC_ALLOWED_SUBS` limits the service to named subjects, which matters when
 the issuer is a public provider rather than your own.
+
+**The human, without a provider: one password.** Set `ADMIN_PASSWORD` and the
+service shows a single prompt, then issues the same session cookie. There is
+one account; per-account isolation collapses to one, and everything else —
+pairing, revocation, the pool — is unchanged.
+
+A single shared secret on a public URL is the weakest of the three, so it does
+not stand alone: the comparison is constant-time, failures are rate-limited
+per IP and per session with a widening delay, and the service refuses to start
+with a password under 12 characters. `ADMIN_PASSWORD_HASH` (argon2id) is
+accepted instead, for deployments that would rather not put the secret in the
+environment.
 
 **The machine, over the WebSocket: a device token.** Created by pairing, so a
 secret is never pasted into a config file by hand:
@@ -181,7 +205,8 @@ One image, two auth modes, so the same service runs on a laptop and in public:
 | `AUTH_MODE` | Who may connect | For |
 |---|---|---|
 | `token` | anyone with `TMUX_MCP_UI_TOKEN` | a single user, on `127.0.0.1` |
-| `oidc` | accounts from the configured issuer, paired devices | the public deployment |
+| `password` | whoever knows `ADMIN_PASSWORD` | one person, hosted |
+| `oidc` | accounts from the configured issuer, paired devices | several people, or an existing IdP |
 
 The inbox, the pool and the protocol are the same code in both; only the
 adapter that answers "which account is this?" differs.
@@ -191,12 +216,13 @@ services:
   tmux-mcp-ui:
     image: ghcr.io/frankhommers/tmux-mcp-ui
     environment:
-      AUTH_MODE: oidc
+      # Pick one: OIDC_ISSUER for a provider, or ADMIN_PASSWORD for one prompt.
       PUBLIC_URL: https://tmux.example.com
       OIDC_ISSUER: https://id.example.com/application/o/tmux-mcp/
       OIDC_CLIENT_ID: "…"
       OIDC_CLIENT_SECRET: "…"
       OIDC_ALLOWED_SUBS: "…"        # optional allowlist; empty means anyone the issuer admits
+      # ADMIN_PASSWORD: "…"         # instead of OIDC_*: a single password prompt
       SESSION_SECRET: "…"
       DATABASE_PATH: /data/tmux-mcp.db
     volumes: [tmux-mcp-ui:/data]
@@ -302,6 +328,9 @@ package or a `npx tmux-mcp` start.
 - OIDC: driven against a stub issuer — discovery, PKCE, state, nonce, a
   tampered id_token rejected, and an account keyed on issuer+sub rather than
   email.
+- Password mode: the mode is chosen from the configuration, a wrong password
+  is refused in constant time, repeated failures are delayed, and a password
+  under 12 characters stops the service from starting.
 
 ## Files
 
@@ -311,7 +340,7 @@ package or a `npx tmux-mcp` start.
 - `src/index.ts` — `--ui-url`, `--ui-token`, dial on request, fall back to the
   file path
 - `ui/server/` (new) — the service: agent sockets, browser SSE, auth adapters
-  (`token`, `oidc`), device pairing, SQLite
+  (`token`, `password`, `oidc`), device pairing, SQLite
 - `ui/src/` — pool editing, auto-assignment feedback, sign-in
 - `Dockerfile`, `docker-compose.yml` (new)
 - `README.md` — deployment and the two ways to run the UI
@@ -323,8 +352,10 @@ package or a `npx tmux-mcp` start.
    it is useful before anything is hosted.
 2. **The service and its image.** One server with pluggable auth, the
    container, `token` mode end to end.
-3. **Public deployment.** OIDC sign-in, device pairing, per-account isolation,
-   revocation, rate limits, TLS expectations.
+3. **Public deployment.** Password sign-in and OIDC sign-in, device pairing,
+   per-account isolation, revocation, rate limits, TLS expectations. Password
+   mode lands first: it is what makes a hosted deployment usable without an
+   identity provider.
 4. **Pool.** Pre-assigned entries, matching, auto-assignment, undo.
 
 Parked: watching a pane.
