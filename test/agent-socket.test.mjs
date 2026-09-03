@@ -489,3 +489,25 @@ test('a refused check drops the grant, the same way a revoke does', async () => 
     }
   );
 });
+
+test('a server that shuts down says it holds nothing any more', async () => {
+  await withFakeUi(acceptHandshake, async ui => {
+    const agent = makeAgent(ui.url, {
+      listGrants: () => [{ target: '%3', kind: 'pane', label: '%3  a', since: 1 }],
+    });
+    agent.reportGrants();
+    await ui.waitFor('grants');
+
+    // Grants live in this process's memory, so they end with it.
+    agent.stop();
+
+    const deadline = Date.now() + 2000;
+    let last;
+    while (Date.now() < deadline) {
+      last = ui.received.filter(m => m.type === 'grants').at(-1);
+      if (last && last.grants.length === 0) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+    assert.deepEqual(last?.grants, [], 'dispatch should not keep showing a dead process\'s pane');
+  });
+});

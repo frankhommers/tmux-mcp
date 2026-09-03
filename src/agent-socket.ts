@@ -173,6 +173,10 @@ export class AgentSocket {
 
   /** Close everything; used on shutdown. */
   stop(): void {
+    // Grants live in this process's memory, so they end with it. Say so while
+    // the socket is still up, or dispatch would keep showing a pane nobody
+    // holds. There is no dialling in for this: shutdown must not block.
+    if (this.connected && !this.closing) this.send({ type: 'grants', grants: [] });
     this.closing = true;
     for (const id of [...this.open.keys()]) this.withdraw(id, 'shutdown');
     this.disconnect();
