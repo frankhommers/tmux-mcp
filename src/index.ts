@@ -15,6 +15,8 @@ import type { Answer, PaneRequest } from './requests.js';
 import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
 import { spawnAssignHook } from './assign-hook.js';
 import { AgentSocket } from './agent-socket.js';
+import { isPairCliCommand, runPairCli } from './cli-pair.js';
+import { tokenFor } from './credentials.js';
 
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
@@ -1777,6 +1779,9 @@ async function main() {
     if (isGrantCliCommand(subcommand)) {
       process.exit(await runGrantCli(process.argv.slice(2)));
     }
+    if (isPairCliCommand(subcommand)) {
+      process.exit(await runPairCli(process.argv.slice(2)));
+    }
 
     const { values } = parseArgs({
       options: {
@@ -1809,9 +1814,14 @@ async function main() {
 
     const uiUrl = (values['ui-url'] as string | undefined) ?? process.env.TMUX_MCP_UI_URL;
     if (humanAssigned && uiUrl) {
+      // An explicit token wins; otherwise use whatever `ui-login` stored for
+      // this deployment, so a paired machine needs no flags at all.
+      const uiToken = (values['ui-token'] as string | undefined)
+        ?? process.env.TMUX_MCP_UI_TOKEN
+        ?? await tokenFor(uiUrl);
       agentSocket = new AgentSocket({
         url: uiUrl,
-        token: (values['ui-token'] as string | undefined) ?? process.env.TMUX_MCP_UI_TOKEN,
+        token: uiToken,
         scope: getScopeMode(),
         clientVersion: 'tmux-mcp/0.2.3',
         onAnswer: answerFromUi,

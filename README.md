@@ -120,6 +120,20 @@ these paths, so it cannot answer its own request:
    outbound, nothing on your machine listens and it works from behind any
    router.
 
+   Pair the machine once, then point the server at the UI:
+
+   ```bash
+   tmux-mcp ui-login --url https://tmux.example.com
+   # Open https://tmux.example.com/link and enter: WQ7F-2K9P
+
+   tmux-mcp --human-assigned --ui-url wss://tmux.example.com/agent
+   ```
+
+   `ui-login` stores a device token in `~/.tmux-mcp/credentials.json` (mode
+   0600), which the server picks up by URL, so `--ui-token` is only needed for
+   a shared-token deployment. Revoke a machine from the UI and its socket
+   drops.
+
    The socket is open only while a request is pending. If the UI is
    unreachable, refuses the connection, or speaks a different protocol major,
    the request still lands in the requests directory and the channels below
