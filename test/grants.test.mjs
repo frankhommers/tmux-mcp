@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  revokeGrant,
   addGrant,
   isPaneGranted,
   isWindowGranted,
@@ -85,4 +86,18 @@ test('human-assigned allows a granted window and its session', async () => {
   assert.equal(await isInScope('$0', 'session'), true);
   assert.equal(await isInScope('$1', 'session'), false);
   initHumanAssigned(false);
+});
+
+test('revoking a granted pane takes the access away again', () => {
+  resetGrants();
+  addGrant({ kind: 'pane', id: '%3', windowId: '@1', sessionId: '$0' });
+  assert.equal(isPaneGranted('%3', '@1'), true);
+
+  assert.equal(revokeGrant('%3'), true, 'revoking should report that it held something');
+  assert.equal(isPaneGranted('%3', '@1'), false, 'the pane should no longer be reachable');
+});
+
+test('revoking something that was never granted reports nothing was held', () => {
+  resetGrants();
+  assert.equal(revokeGrant('%99'), false);
 });

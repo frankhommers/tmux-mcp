@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import {
   PROTOCOL_VERSION,
@@ -7,6 +8,7 @@ import {
   type ServerToDispatch,
   type DispatchToServer,
   type WireCandidate,
+  type WireGrant,
 } from './protocol.js';
 
 /**
@@ -28,7 +30,19 @@ export interface AgentSocketOptions {
     => Promise<{ ok: true; target: string } | { ok: false; error: string }>;
   /** Called when dispatch asks for a fresh candidate list. */
   onRefresh: (id: string) => Promise<WireCandidate[]>;
+  /** The grants held right now, reported by `reportGrants`. */
+  listGrants?: () => WireGrant[];
+  /** Take a grant back. Returns whether anything was actually held. */
+  onRevoke?: (target: string) => boolean | Promise<boolean>;
   log: (level: 'info' | 'warning', message: string) => void;
+  /**
+   * How long to stay after reporting grants, so dispatch can push commands
+   * that were queued while this agent was away. Kept short: the connection
+   * exists to carry a change, not to be held open.
+   */
+  lingerMs?: number;
+  /** How long to wait for a verdict before falling back to the local grant. */
+  confirmTimeoutMs?: number;
   /** Test seam. */
   connect?: (url: string, token?: string) => WebSocket;
 }
@@ -44,6 +58,8 @@ interface OpenRequest {
 
 const BACKOFF_START_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
+const LINGER_MS = 1000;
+const CONFIRM_TIMEOUT_MS = 1500;
 
 function defaultConnect(url: string, token?: string): WebSocket {
   // Node's WebSocket takes headers through a non-standard option bag; the DOM
@@ -61,6 +77,12 @@ export class AgentSocket {
   /** Set when dispatch refused us: retrying would just be refused again. */
   private refused = false;
   private closing = false;
+  /** A grant report is owed to dispatch as soon as the handshake lands. */
+  private reporting = false;
+  private lingerTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly pendingChecks = new Map<string, (allowed: boolean) => void>();
+
+  private readonly instanceId = randomUUID();
 
   constructor(private readonly options: AgentSocketOptions) {}
 
@@ -89,6 +111,60 @@ export class AgentSocket {
     if (this.open.size === 0) this.disconnect();
   }
 
+  /**
+   * Tell dispatch what is granted now. An idle agent holds no socket, so this
+   * dials in, reports, and hangs up again unless a request keeps it open.
+   */
+  reportGrants(): void {
+    if (this.refused || this.closing) return;
+    this.reporting = true;
+    if (this.connected) this.flushGrants();
+    else this.ensureConnection();
+  }
+
+  /**
+   * Ask dispatch whether a target this server still holds may be used right
+   * now. A human who revokes in the UI is obeyed at the next action rather
+   * than at the next reconnect.
+   *
+   * Falls back to `true` when dispatch cannot be reached: the local grant
+   * store already refused everything that was never handed over, and a dead
+   * dispatch must not take away access a human deliberately gave.
+   */
+  async confirm(target: string): Promise<boolean> {
+    if (this.refused || this.closing) return true;
+    if (!this.connected) {
+      this.ensureConnection();
+      const ready = await this.waitForHandshake();
+      if (!ready) return true;
+    }
+    const id = randomUUID();
+    return new Promise<boolean>(resolve => {
+      const timer = setTimeout(() => {
+        this.pendingChecks.delete(id);
+        this.options.log('warning', `dispatch did not answer about ${target}; using the local grant`);
+        resolve(true);
+      }, this.options.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS);
+      timer.unref?.();
+      this.pendingChecks.set(id, allowed => {
+        clearTimeout(timer);
+        resolve(allowed);
+      });
+      this.send({ type: 'check', id, target });
+      this.lingerThenHangUp();
+    });
+  }
+
+  private async waitForHandshake(): Promise<boolean> {
+    const deadline = Date.now() + (this.options.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS);
+    while (Date.now() < deadline) {
+      if (this.connected) return true;
+      if (this.refused || this.closing) return false;
+      await new Promise(r => setTimeout(r, 20));
+    }
+    return false;
+  }
+
   /** Close everything; used on shutdown. */
   stop(): void {
     this.closing = true;
@@ -98,6 +174,7 @@ export class AgentSocket {
 
   private identity(): AgentIdentity {
     return {
+      instanceId: this.instanceId,
       pid: process.pid,
       host: hostname(),
       cwd: process.cwd(),
@@ -167,6 +244,7 @@ export class AgentSocket {
         this.backoff = BACKOFF_START_MS;
         // Re-offer everything: this may be a reconnect.
         for (const request of this.open.values()) this.send({ type: 'request', ...request });
+        if (this.reporting) this.flushGrants();
         return;
       }
 
@@ -189,6 +267,23 @@ export class AgentSocket {
         return;
       }
 
+      case 'verdict': {
+        const settle = this.pendingChecks.get(message.id);
+        if (settle) {
+          this.pendingChecks.delete(message.id);
+          settle(message.allowed);
+        }
+        return;
+      }
+
+      case 'revoke': {
+        const revoked = await this.options.onRevoke?.(message.target);
+        // Report either way: dispatch's picture was wrong if nothing was held,
+        // and this is what corrects it.
+        if (revoked !== undefined) this.reportGrants();
+        return;
+      }
+
       case 'answer': {
         if (!this.open.has(message.id)) return;
         const answer = 'target' in message
@@ -201,6 +296,22 @@ export class AgentSocket {
         return;
       }
     }
+  }
+
+  private flushGrants(): void {
+    this.reporting = false;
+    this.send({ type: 'grants', grants: this.options.listGrants?.() ?? [] });
+    this.lingerThenHangUp();
+  }
+
+  /** Give dispatch a moment to push queued commands, then drop an idle socket. */
+  private lingerThenHangUp(): void {
+    if (this.lingerTimer) clearTimeout(this.lingerTimer);
+    this.lingerTimer = setTimeout(() => {
+      this.lingerTimer = null;
+      if (this.open.size === 0 && !this.reporting) this.disconnect();
+    }, this.options.lingerMs ?? LINGER_MS);
+    this.lingerTimer.unref?.();
   }
 
   private giveUp(message: string): void {
@@ -221,6 +332,10 @@ export class AgentSocket {
   }
 
   private disconnect(): void {
+    if (this.lingerTimer) {
+      clearTimeout(this.lingerTimer);
+      this.lingerTimer = null;
+    }
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;

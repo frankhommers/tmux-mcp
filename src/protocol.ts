@@ -8,7 +8,7 @@
  */
 
 /** "<major>.<minor>". Same major connects; different major refuses. */
-export const PROTOCOL_VERSION = '1.0';
+export const PROTOCOL_VERSION = '1.1';
 
 export function protocolMajor(version: string): string {
   return version.split('.')[0] ?? '';
@@ -19,6 +19,12 @@ export function isCompatible(theirs: string): boolean {
 }
 
 export interface AgentIdentity {
+  /**
+   * Stable for the lifetime of one MCP server process, so a reconnect is
+   * recognisably the same server. Grants live in that process's memory, so a
+   * new id means the old grants are gone with it.
+   */
+  instanceId: string;
   pid: number;
   host: string;
   cwd: string;
@@ -30,6 +36,14 @@ export interface AgentIdentity {
 export interface WireCandidate {
   id: string;
   label: string;
+}
+
+/** A resource a human has handed to this agent, as dispatch sees it. */
+export interface WireGrant {
+  target: string;
+  kind: 'pane' | 'window';
+  label: string;
+  since: number;
 }
 
 export type ServerToDispatch =
@@ -46,14 +60,18 @@ export type ServerToDispatch =
   | { type: 'candidates'; id: string; candidates: WireCandidate[] }
   | { type: 'withdraw'; id: string; why: 'expired' | 'answered_elsewhere' | 'shutdown' }
   | { type: 'result'; id: string; ok: true; target: string }
-  | { type: 'result'; id: string; ok: false; error: string };
+  | { type: 'result'; id: string; ok: false; error: string }
+  | { type: 'grants'; grants: WireGrant[] }
+  | { type: 'check'; id: string; target: string };
 
 export type DispatchToServer =
   | { type: 'welcome'; protocolVersion: string; account?: string }
   | { type: 'refuse'; reason: 'protocol_version' | 'unauthorized'; protocolVersion?: string }
   | { type: 'answer'; id: string; target: string }
   | { type: 'answer'; id: string; deny: true; reason?: string }
-  | { type: 'refresh'; id: string };
+  | { type: 'refresh'; id: string }
+  | { type: 'revoke'; target: string }
+  | { type: 'verdict'; id: string; allowed: boolean };
 
 /**
  * Parse a frame defensively: it arrives from another process that may be a
@@ -75,6 +93,16 @@ export function parseDispatchMessage(raw: string): DispatchToServer | null {
     case 'answer':
     case 'refresh':
       return typeof message.id === 'string' ? (message as DispatchToServer) : null;
+    case 'verdict': {
+      const { allowed } = value as { allowed?: unknown };
+      return typeof message.id === 'string' && typeof allowed === 'boolean'
+        ? (message as DispatchToServer)
+        : null;
+    }
+    case 'revoke': {
+      const { target } = value as { target?: unknown };
+      return typeof target === 'string' ? (message as DispatchToServer) : null;
+    }
     default:
       return null;
   }

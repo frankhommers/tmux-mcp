@@ -15,12 +15,14 @@ export interface GrantRecord {
   /** Window the resource lives in (equals `id` for kind 'window'). */
   windowId: string;
   sessionId: string;
+  /** When the human handed it over. Set by addGrant when absent. */
+  since?: number;
 }
 
 const grants = new Map<string, GrantRecord>();
 
 export function addGrant(record: GrantRecord): void {
-  grants.set(record.id, record);
+  grants.set(record.id, { since: Date.now(), ...record });
 }
 
 export function isPaneGranted(paneId: string, windowId: string): boolean {
@@ -58,6 +60,11 @@ export function hasAnyGrant(): boolean {
 
 export function listGrants(): GrantRecord[] {
   return [...grants.values()];
+}
+
+/** Take a grant back. Returns whether anything was actually held. */
+export function revokeGrant(id: string): boolean {
+  return grants.delete(id);
 }
 
 /**

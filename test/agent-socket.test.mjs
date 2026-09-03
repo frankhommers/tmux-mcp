@@ -300,3 +300,136 @@ test('the socket reconnects and re-offers open requests', async () => {
     }
   });
 });
+
+test('reporting grants dials in and sends what is currently granted', async () => {
+  await withFakeUi(
+    (socket, message) => {
+      if (message.type === 'hello') {
+        socket.send(JSON.stringify({ type: 'welcome', protocolVersion: PROTOCOL_VERSION }));
+      }
+    },
+    async ui => {
+      const agent = makeAgent(ui.url, {
+        listGrants: () => [{ target: '%3', kind: 'pane', label: '%3  agents:0.1', since: 1000 }],
+      });
+      agent.reportGrants();
+      const grants = await ui.waitFor('grants');
+      assert.deepEqual(grants.grants, [
+        { target: '%3', kind: 'pane', label: '%3  agents:0.1', since: 1000 },
+      ]);
+      agent.stop();
+    }
+  );
+});
+
+test('after reporting grants with nothing pending, the socket hangs up again', async () => {
+  await withFakeUi(
+    (socket, message) => {
+      if (message.type === 'hello') {
+        socket.send(JSON.stringify({ type: 'welcome', protocolVersion: PROTOCOL_VERSION }));
+      }
+    },
+    async ui => {
+      const agent = makeAgent(ui.url, { listGrants: () => [] });
+      agent.reportGrants();
+      await ui.waitFor('grants');
+
+      const deadline = Date.now() + 2000;
+      while (agent.connected && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+      assert.equal(agent.connected, false, 'an idle agent should not keep the socket open');
+      agent.stop();
+    }
+  );
+});
+
+test('a revoke from dispatch drops the grant and reports what is left', async () => {
+  const held = new Map([
+    ['%3', { target: '%3', kind: 'pane', label: '%3  a', since: 1 }],
+    ['%4', { target: '%4', kind: 'pane', label: '%4  b', since: 2 }],
+  ]);
+  await withFakeUi(
+    (socket, message) => {
+      if (message.type === 'hello') {
+        socket.send(JSON.stringify({ type: 'welcome', protocolVersion: PROTOCOL_VERSION }));
+        socket.send(JSON.stringify({ type: 'revoke', target: '%3' }));
+      }
+    },
+    async ui => {
+      const agent = makeAgent(ui.url, {
+        listGrants: () => [...held.values()],
+        onRevoke: target => held.delete(target),
+      });
+      agent.reportGrants();
+
+      const deadline = Date.now() + 4000;
+      let last;
+      while (Date.now() < deadline) {
+        const reports = ui.received.filter(m => m.type === 'grants');
+        last = reports.at(-1);
+        if (last && last.grants.length === 1) break;
+        await new Promise(r => setTimeout(r, 20));
+      }
+      assert.deepEqual(last?.grants.map(g => g.target), ['%4'], 'the revoked pane should be gone');
+      assert.equal(held.has('%3'), false, 'the server should have dropped the grant');
+      agent.stop();
+    }
+  );
+});
+
+test('the same process keeps one identity across a reconnect', async () => {
+  await withFakeUi(
+    (socket, message) => {
+      if (message.type === 'hello') {
+        socket.send(JSON.stringify({ type: 'welcome', protocolVersion: PROTOCOL_VERSION }));
+      }
+    },
+    async ui => {
+      const agent = makeAgent(ui.url, { listGrants: () => [] });
+
+      agent.reportGrants();
+      const first = await ui.waitFor('hello');
+      assert.ok(first.agent.instanceId, 'hello should carry a stable instance id');
+
+      // Drop the socket the way a restart of the service would.
+      ui.connections.at(-1).close();
+      await new Promise(r => setTimeout(r, 200));
+      agent.reportGrants();
+
+      const deadline = Date.now() + 4000;
+      while (ui.received.filter(m => m.type === 'hello').length < 2 && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 20));
+      }
+      const hellos = ui.received.filter(m => m.type === 'hello');
+      assert.equal(hellos.length, 2, 'the agent should have dialled in again');
+      assert.equal(hellos[1].agent.instanceId, hellos[0].agent.instanceId,
+        'a reconnect is the same server, so the instance id must not change');
+      agent.stop();
+    }
+  );
+});
+
+test('confirming a target asks dispatch and honours a refusal', async () => {
+  await withFakeUi(
+    (socket, message) => {
+      if (message.type === 'hello') {
+        socket.send(JSON.stringify({ type: 'welcome', protocolVersion: PROTOCOL_VERSION }));
+      }
+      if (message.type === 'check') {
+        socket.send(JSON.stringify({ type: 'verdict', id: message.id, allowed: message.target === '%4' }));
+      }
+    },
+    async ui => {
+      const agent = makeAgent(ui.url, { listGrants: () => [] });
+      assert.equal(await agent.confirm('%4'), true, 'dispatch allowed this one');
+      assert.equal(await agent.confirm('%3'), false, 'dispatch revoked this one');
+      agent.stop();
+    }
+  );
+});
+
+test('an unreachable dispatch does not lock the agent out of what it holds', async () => {
+  const agent = makeAgent('ws://127.0.0.1:1/agent', { listGrants: () => [], confirmTimeoutMs: 300 });
+  assert.equal(await agent.confirm('%3'), true,
+    'with no dispatch to ask, the local grant is what decides');
+  agent.stop();
+});

@@ -245,3 +245,31 @@ test('an unreachable dispatch does not stop a request from being answered', asyn
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });
+
+test('once a pane is assigned, the server reports it as a grant', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
+  const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+  try {
+    await withServerAndUi(async ({ client, waitFor }) => {
+      const pending = client.callTool({
+        name: 'request-pane',
+        arguments: { reason: 'report my grants', timeoutSeconds: 20 },
+      });
+      await pending;
+
+      const report = await waitFor('grants');
+      assert.deepEqual(report.grants.map(g => g.target), [paneId]);
+      assert.equal(report.grants[0].kind, 'pane');
+      assert.ok(report.grants[0].label.includes(sessionName),
+        `the label should say where the pane lives, got ${report.grants[0].label}`);
+    }, {
+      behaviour: (socket, message) => {
+        if (message.type === 'request') {
+          socket.send(JSON.stringify({ type: 'answer', id: message.id, target: paneId }));
+        }
+      },
+    });
+  } finally {
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});

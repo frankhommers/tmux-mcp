@@ -9,7 +9,7 @@ import { initScope, assertInScope, isScopeActive, isInScope, isWindowScope, getS
 import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
-import { addGrant, pruneGrants } from './grants.js';
+import { addGrant, listGrants, revokeGrant, pruneGrants } from './grants.js';
 import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, expireRequests, getLastRefusal } from './requests.js';
 import type { Answer, PaneRequest } from './requests.js';
 import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
@@ -112,6 +112,17 @@ const server = new McpServer({
 // Resolved in main(); the request-pane tool only runs after connect().
 let requestsDir = '';
 let assignHookPath: string | undefined;
+/**
+ * What a granted target looked like when it was handed over. Kept beside the
+ * grant itself so dispatch can show a name rather than a bare `%3`, without
+ * the grant store learning anything about tmux.
+ */
+const grantLabels = new Map<string, string>();
+
+function describeTarget(target: string, request: PaneRequest): string {
+  return request.candidates.find(candidate => candidate.id === target)?.label ?? target;
+}
+
 // The dispatch service, when one is configured. Null means every request is
 // answered through the requests directory and the grant CLI.
 let agentSocket: AgentSocket | null = null;
@@ -1831,6 +1842,21 @@ async function main() {
           const candidates = await buildCandidates(request.kind);
           return candidates.map(c => ({ id: c.id, label: c.label }));
         },
+        listGrants: () => listGrants().map(grant => ({
+          target: grant.id,
+          kind: grant.kind,
+          label: grantLabels.get(grant.id) ?? grant.id,
+          since: grant.since ?? 0,
+        })),
+        onRevoke: target => {
+          const held = revokeGrant(target);
+          if (held) {
+            grantLabels.delete(target);
+            logToClient('info', `revoked ${target} from dispatch`);
+            try { server.sendResourceListChanged(); } catch { /* ignore */ }
+          }
+          return held;
+        },
         log: logToClient,
       });
     }
@@ -1871,8 +1897,10 @@ async function main() {
             windowId: answer.windowId,
             sessionId: answer.sessionId,
           });
+          grantLabels.set(answer.target, describeTarget(answer.target, request));
           logToClient('info', `assigned ${answer.target} via ${answer.via}`);
           try { server.sendResourceListChanged(); } catch { /* ignore */ }
+          agentSocket?.reportGrants();
         }
         cleanupRequest(id);
       });
