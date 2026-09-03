@@ -1,8 +1,9 @@
 # Test configuration
 
-`.mcp.json` starts this checkout's own build in human-assigned mode. JSON has
-no comments and not every client accepts JSONC, so `.mcp.json` is strict JSON
-and the commentary lives here.
+`.mcp.json` starts this checkout's own build in human-assigned mode, twice:
+`tmux-human-assigned` answers from the CLI only, and `tmux-via-ui` also dials
+the control UI. JSON has no comments and not every client accepts JSONC, so
+`.mcp.json` is strict JSON and the commentary lives here.
 
 ## Before you start
 
@@ -24,11 +25,27 @@ On the first start Claude Code asks whether to trust the project's MCP
 servers. Until you approve, the server does not load and you will only see
 whatever is configured globally.
 
-## Answering a request
+## Answering a request in the UI
 
-The web UI now lives in its own repository (`tmux-mcp-ui`) and is being
-rebuilt as a service this server dials out to. Until that lands, answer from
-any shell:
+The UI is its own repository and its own service; this server dials out to it.
+Start it once, pair this machine once, and `tmux-via-ui` finds the stored
+token by URL from then on:
+
+```bash
+cd ../../tmux-mcp-ui
+ADMIN_PASSWORD='at-least-twelve' SESSION_SECRET=dev docker compose up -d
+
+node build/index.js ui-login --url http://127.0.0.1:7676
+# open http://127.0.0.1:7676/link and enter the code it prints
+```
+
+A request from `tmux-via-ui` then appears in the inbox, and granting it there
+assigns the pane. `--ui-url` is not a dependency: if the service is down the
+request still lands in the requests directory and the CLI still answers it.
+
+## Answering a request from the CLI
+
+Always available, for either server:
 
 ```bash
 cd /Users/frankhommers/Repos/tmux-mcp

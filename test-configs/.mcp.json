@@ -7,6 +7,15 @@
         "--human-assigned",
         "--requests-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/requests"
       ]
+    },
+    "tmux-via-ui": {
+      "command": "node",
+      "args": [
+        "/Users/frankhommers/Repos/tmux-mcp/build/index.js",
+        "--human-assigned",
+        "--ui-url=ws://127.0.0.1:7676/agent",
+        "--requests-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/requests"
+      ]
     }
   }
 }
