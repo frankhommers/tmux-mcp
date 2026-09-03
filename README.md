@@ -112,20 +112,11 @@ and is not the server's own pane.
 A request is answered outside the agent's client — the agent is in none of
 these paths, so it cannot answer its own request:
 
-1. **The control UI** — `--ui` starts a local web server, one per machine and
-   shared by every tmux-mcp process, at `http://127.0.0.1:7676`. It lists
-   pending requests with a **live** target list: a pane you open after reading
-   the request is assignable, which a snapshot prompt can never do.
-
-   ```bash
-   tmux-mcp ui              # run it yourself
-   tmux-mcp ui --print-url  # the URL, including the access token
-   tmux-mcp ui --stop
-   ```
-
-   The daemon writes `~/.tmux-mcp/ui.json` (pid, port, token, mode 0600). An
-   MCP server started with `--ui` reuses a running daemon and otherwise spawns
-   one, under a lock so simultaneous agents produce exactly one.
+1. **The control UI** — a separate service, in its own repository:
+   [tmux-mcp-ui](https://github.com/frankhommers/tmux-mcp-ui). It never runs
+   tmux and mounts nothing: this server dials out to it over a WebSocket and
+   carries the pane candidates with it, which is what makes hosting it
+   possible. Being built; the two channels below work today.
 
 2. **The CLI** — from any shell, including over SSH:
 
@@ -142,11 +133,9 @@ There is deliberately **no MCP elicitation**. Prompting inside the agent's
 client showed a list frozen at the moment the agent asked, behaved differently
 per client, and produced a second prompt whenever a hook was also configured.
 
-The UI binds to `127.0.0.1` only, requires the token from `ui.json`, and
-rejects foreign `Host`/`Origin` headers. Whoever can read that file can assign
-panes, exactly like whoever can write to the requests directory. The UI itself
-is **not** scope-restricted — it is your tool and shows all of tmux — but an
-assignment still has to fall inside the scope recorded in the request.
+Whichever channel answers, this server validates the answer itself: the target
+must exist right now, sit inside `--scope`, and not be the server's own pane.
+Nothing that answers a request can widen what an agent may touch.
 
 ##### Assign hook contract
 

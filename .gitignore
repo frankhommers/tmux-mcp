@@ -6,6 +6,4 @@ build/
 .yolo.json
 .worktrees/
 test-configs/requests/
-test-configs/state/
-ui/node_modules/
 .playwright-mcp/

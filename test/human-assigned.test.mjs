@@ -27,12 +27,8 @@ test('listAllPanes reports ids, names and current command', async () => {
 import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-
-const execFileAsync = promisify(execFile);
 
 function resultText(result) {
   assert.equal(result.content[0]?.type, 'text');
@@ -225,34 +221,3 @@ test('no elicitation is sent, even to a client that supports it', async () => {
   }
 });
 
-test('--ui starts a daemon and puts its request URL in the log notification', async () => {
-  const { LoggingMessageNotificationSchema } = await import('@modelcontextprotocol/sdk/types.js');
-  const sessionName = `tmux-mcp-ha-${process.pid}-${randomUUID()}`;
-  await executeTmux(['new-session', '-d', '-s', sessionName]);
-  const stateDir = await mkdtemp(join(tmpdir(), 'tmux-mcp-uiflag-'));
-  const requestsDir = join(stateDir, 'requests');
-
-  const client = new Client({ name: 'ui-flag-test', version: '1.0.0' }, { capabilities: { logging: {} } });
-  const logs = [];
-  client.setNotificationHandler(LoggingMessageNotificationSchema, note => { logs.push(String(note.params.data)); });
-
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: ['build/index.js', '--human-assigned', '--ui', `--requests-dir=${requestsDir}`, `--state-dir=${stateDir}`],
-    cwd: process.cwd(),
-    stderr: 'pipe',
-  });
-
-  try {
-    await client.connect(transport);
-    await client.callTool({ name: 'request-pane', arguments: { reason: 'look at the UI', timeoutSeconds: 2 } });
-    assert.ok(
-      logs.some(line => /http:\/\/127\.0\.0\.1:\d+\/r\/r-[a-z0-9]+/.test(line)),
-      `expected a request URL in the log notifications, got: ${JSON.stringify(logs)}`
-    );
-  } finally {
-    await transport.close();
-    await execFileAsync(process.execPath, ['build/index.js', 'ui', '--stop', `--state-dir=${stateDir}`], { cwd: process.cwd() });
-    await executeTmux(['kill-session', '-t', sessionName]);
-  }
-});

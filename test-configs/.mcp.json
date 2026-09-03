@@ -5,9 +5,7 @@
       "args": [
         "/Users/frankhommers/Repos/tmux-mcp/build/index.js",
         "--human-assigned",
-        "--ui",
-        "--requests-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/requests",
-        "--state-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/state"
+        "--requests-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/requests"
       ]
     }
   }
