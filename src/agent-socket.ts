@@ -242,9 +242,10 @@ export class AgentSocket {
         }
         this.handshaken = true;
         this.backoff = BACKOFF_START_MS;
-        // Re-offer everything: this may be a reconnect.
+        // Re-offer everything: this may be a reconnect, and dispatch may have
+        // restarted with an empty head since we last spoke.
         for (const request of this.open.values()) this.send({ type: 'request', ...request });
-        if (this.reporting) this.flushGrants();
+        this.flushGrants();
         return;
       }
 

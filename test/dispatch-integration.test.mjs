@@ -51,10 +51,10 @@ async function withServerAndUi(run, { behaviour, extraArgs = [] } = {}) {
   });
   await client.connect(transport);
 
-  const waitFor = async (type, timeoutMs = 8000) => {
+  const waitFor = async (type, timeoutMs = 8000, where = () => true) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const found = received.find(m => m.type === type);
+      const found = received.find(m => m.type === type && where(m));
       if (found) return found;
       await new Promise(r => setTimeout(r, 25));
     }
@@ -257,7 +257,9 @@ test('once a pane is assigned, the server reports it as a grant', async () => {
       });
       await pending;
 
-      const report = await waitFor('grants');
+      // The handshake already reported an empty set; wait for the one that
+      // carries the pane the human just handed over.
+      const report = await waitFor('grants', 8000, m => m.grants.length > 0);
       assert.deepEqual(report.grants.map(g => g.target), [paneId]);
       assert.equal(report.grants[0].kind, 'pane');
       assert.ok(report.grants[0].label.includes(sessionName),

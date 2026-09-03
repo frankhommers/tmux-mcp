@@ -433,3 +433,21 @@ test('an unreachable dispatch does not lock the agent out of what it holds', asy
     'with no dispatch to ask, the local grant is what decides');
   agent.stop();
 });
+
+test('every handshake re-offers the grants, so a restarted dispatch relearns them', async () => {
+  await withFakeUi(acceptHandshake, async ui => {
+    const agent = makeAgent(ui.url, {
+      listGrants: () => [{ target: '%7', kind: 'pane', label: '%7  agents:0.2', since: 2000 }],
+    });
+    try {
+      // A request, not a report: dispatch still ends up knowing what is held.
+      agent.offer(REQUEST);
+      const grants = await ui.waitFor('grants');
+      assert.deepEqual(grants.grants, [
+        { target: '%7', kind: 'pane', label: '%7  agents:0.2', since: 2000 },
+      ]);
+    } finally {
+      agent.stop();
+    }
+  });
+});
