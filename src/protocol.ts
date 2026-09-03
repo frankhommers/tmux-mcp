@@ -8,7 +8,7 @@
  */
 
 /** "<major>.<minor>". Same major connects; different major refuses. */
-export const PROTOCOL_VERSION = '1.1';
+export const PROTOCOL_VERSION = '1.2';
 
 export function protocolMajor(version: string): string {
   return version.split('.')[0] ?? '';
@@ -44,6 +44,8 @@ export interface WireGrant {
   kind: 'pane' | 'window';
   label: string;
   since: number;
+  /** Why it was asked for. Outlives the request, which is gone once answered. */
+  reason?: string;
 }
 
 export type ServerToDispatch =

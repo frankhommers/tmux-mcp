@@ -264,6 +264,8 @@ test('once a pane is assigned, the server reports it as a grant', async () => {
       assert.equal(report.grants[0].kind, 'pane');
       assert.ok(report.grants[0].label.includes(sessionName),
         `the label should say where the pane lives, got ${report.grants[0].label}`);
+      assert.equal(report.grants[0].reason, 'report my grants',
+        'why the pane was handed over outlives the request that asked for it');
     }, {
       behaviour: (socket, message) => {
         if (message.type === 'request') {

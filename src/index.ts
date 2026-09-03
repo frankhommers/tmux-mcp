@@ -113,11 +113,12 @@ const server = new McpServer({
 let requestsDir = '';
 let assignHookPath: string | undefined;
 /**
- * What a granted target looked like when it was handed over. Kept beside the
- * grant itself so dispatch can show a name rather than a bare `%3`, without
- * the grant store learning anything about tmux.
+ * What a granted target looked like when it was handed over, and why it was
+ * asked for. Kept beside the grant itself so dispatch can show a name and a
+ * purpose rather than a bare `%3`, without the grant store learning anything
+ * about tmux. The reason outlives the request, which is deleted once answered.
  */
-const grantLabels = new Map<string, string>();
+const grantContext = new Map<string, { label: string; reason: string }>();
 
 function describeTarget(target: string, request: PaneRequest): string {
   return request.candidates.find(candidate => candidate.id === target)?.label ?? target;
@@ -1845,13 +1846,14 @@ async function main() {
         listGrants: () => listGrants().map(grant => ({
           target: grant.id,
           kind: grant.kind,
-          label: grantLabels.get(grant.id) ?? grant.id,
+          label: grantContext.get(grant.id)?.label ?? grant.id,
+          reason: grantContext.get(grant.id)?.reason,
           since: grant.since ?? 0,
         })),
         onRevoke: target => {
           const held = revokeGrant(target);
           if (held) {
-            grantLabels.delete(target);
+            grantContext.delete(target);
             logToClient('info', `revoked ${target} from dispatch`);
             try { server.sendResourceListChanged(); } catch { /* ignore */ }
           }
@@ -1899,7 +1901,10 @@ async function main() {
             windowId: answer.windowId,
             sessionId: answer.sessionId,
           });
-          grantLabels.set(answer.target, describeTarget(answer.target, request));
+          grantContext.set(answer.target, {
+            label: describeTarget(answer.target, request),
+            reason: request.reason,
+          });
           logToClient('info', `assigned ${answer.target} via ${answer.via}`);
           try { server.sendResourceListChanged(); } catch { /* ignore */ }
           agentSocket?.reportGrants();
