@@ -139,9 +139,22 @@ the repo layout. `hello` therefore carries a protocol version:
 
 Two audiences, two mechanisms, one account.
 
-**The human, in a browser: GitHub OAuth.** No passwords to store and no mail
-to send. The account is the GitHub user id; the browser keeps an httpOnly,
-secure, `SameSite=Lax` session cookie.
+**The human, in a browser: OIDC.** Discovery plus authorization code with
+PKCE, so any compliant provider works — Google, Keycloak, Authentik, Zitadel,
+Auth0, Entra — including one you host yourself. No passwords to store and no
+mail to send. The account is `issuer` + `sub`, never the email, because an
+email can be reassigned. The browser keeps an httpOnly, secure,
+`SameSite=Lax` session cookie.
+
+GitHub is deliberately not special-cased: it has no OIDC discovery for user
+login (`https://github.com/.well-known/openid-configuration` is a 404; the
+only GitHub issuer, `token.actions.githubusercontent.com`, mints tokens for
+Actions workloads, not for people). To sign in with GitHub, federate it
+behind an OIDC provider.
+
+Who may sign in is the issuer's business, with one optional guard:
+`OIDC_ALLOWED_SUBS` limits the service to named subjects, which matters when
+the issuer is a public provider rather than your own.
 
 **The machine, over the WebSocket: a device token.** Created by pairing, so a
 secret is never pasted into a config file by hand:
@@ -168,7 +181,7 @@ One image, two auth modes, so the same service runs on a laptop and in public:
 | `AUTH_MODE` | Who may connect | For |
 |---|---|---|
 | `token` | anyone with `TMUX_MCP_UI_TOKEN` | a single user, on `127.0.0.1` |
-| `github` | signed-in GitHub accounts, paired devices | the public deployment |
+| `oidc` | accounts from the configured issuer, paired devices | the public deployment |
 
 The inbox, the pool and the protocol are the same code in both; only the
 adapter that answers "which account is this?" differs.
@@ -178,10 +191,12 @@ services:
   tmux-mcp-ui:
     image: ghcr.io/frankhommers/tmux-mcp-ui
     environment:
-      AUTH_MODE: github
+      AUTH_MODE: oidc
       PUBLIC_URL: https://tmux.example.com
-      GITHUB_CLIENT_ID: "…"
-      GITHUB_CLIENT_SECRET: "…"
+      OIDC_ISSUER: https://id.example.com/application/o/tmux-mcp/
+      OIDC_CLIENT_ID: "…"
+      OIDC_CLIENT_SECRET: "…"
+      OIDC_ALLOWED_SUBS: "…"        # optional allowlist; empty means anyone the issuer admits
       SESSION_SECRET: "…"
       DATABASE_PATH: /data/tmux-mcp.db
     volumes: [tmux-mcp-ui:/data]
@@ -284,6 +299,9 @@ package or a `npx tmux-mcp` start.
 - Auth: an unpaired device is refused; a revoked device's socket drops; one
   account never sees another's requests.
 - Pairing: the device-code flow completes, expires, and cannot be replayed.
+- OIDC: driven against a stub issuer — discovery, PKCE, state, nonce, a
+  tampered id_token rejected, and an account keyed on issuer+sub rather than
+  email.
 
 ## Files
 
@@ -293,7 +311,7 @@ package or a `npx tmux-mcp` start.
 - `src/index.ts` — `--ui-url`, `--ui-token`, dial on request, fall back to the
   file path
 - `ui/server/` (new) — the service: agent sockets, browser SSE, auth adapters
-  (`token`, `github`), device pairing, SQLite
+  (`token`, `oidc`), device pairing, SQLite
 - `ui/src/` — pool editing, auto-assignment feedback, sign-in
 - `Dockerfile`, `docker-compose.yml` (new)
 - `README.md` — deployment and the two ways to run the UI
@@ -305,7 +323,7 @@ package or a `npx tmux-mcp` start.
    it is useful before anything is hosted.
 2. **The service and its image.** One server with pluggable auth, the
    container, `token` mode end to end.
-3. **Public deployment.** GitHub OAuth, device pairing, per-account isolation,
+3. **Public deployment.** OIDC sign-in, device pairing, per-account isolation,
    revocation, rate limits, TLS expectations.
 4. **Pool.** Pre-assigned entries, matching, auto-assignment, undo.
 
