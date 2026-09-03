@@ -64,6 +64,7 @@ Server → UI:
 | `hello` | server pid, cwd, tmux session name, scope summary, protocol version |
 | `request` | request id, reason, kind, candidates (id + label), createdAt |
 | `candidates` | request id, refreshed candidate list (answer to `refresh`) |
+| `pane-output` | pane id, the pane's current screen including escapes |
 | `withdraw` | request id, why (expired, answered elsewhere, server shutting down) |
 
 UI → server (over the same socket):
@@ -72,6 +73,7 @@ UI → server (over the same socket):
 |---|---|
 | `answer` | request id, `{ target }` or `{ deny, reason }` |
 | `refresh` | request id — asks for a fresh candidate list |
+| `watch` | pane id, or null to stop — start streaming that pane's screen |
 
 The server validates every answer exactly as it does today (exists now, inside
 `--scope`, not the server's own pane). The UI cannot widen anyone's access; it
@@ -112,6 +114,23 @@ The pool is edited from the same page. Panes can be picked from the last
 candidate list the UI received, or typed as a rule when no server is
 connected — which is the normal case when nothing is pending.
 
+## One repository, two artifacts
+
+The repo is not split. The MCP server and the UI ship separately — an npm
+package and a container image — but they share `src/ui/protocol.ts`, and every
+new message touches both ends at once. Splitting would turn that into two pull
+requests and a published types package, or into types that quietly drift. The
+isolation that matters is already there: `ui/` has its own `package.json` and
+its own `node_modules`, so the npm package carries none of it.
+
+Because the two are *deployed* separately, they will run out of step whatever
+the repo layout. `hello` therefore carries a protocol version:
+
+- Same major: connect.
+- Different major: the UI shows which side is behind and how to update it, and
+  the server falls back to the requests directory. It never half-speaks a
+  protocol it does not know.
+
 ## Deployment
 
 The container runs the same code as `tmux-mcp ui`; it is a packaging choice,
@@ -146,12 +165,30 @@ New MCP server flags:
 `--ui` keeps its meaning for the host-local daemon, and is mutually exclusive
 with `--ui-url`.
 
+## Watching a pane
+
+Read-only, and possible precisely because the host holds the connection: the
+container never reads pane content, the host sends it.
+
+The UI sends `watch` with a pane id while you are deciding on a request. The
+server captures that pane (`capture-pane -p -e`, escapes intact) about twice a
+second, hashes the result and sends `pane-output` only when it changed. The UI
+writes it into xterm.js. Sending `watch` with `null`, or closing the request,
+stops it.
+
+Bounded by design: it only runs while a socket is open, which is only while a
+request is pending — exactly when you want to see what a pane is doing before
+handing it over. It only covers panes the server already offers as candidates,
+so watching cannot see further than assigning could.
+
+Not interactive. Typing would mean the UI can send keystrokes into your panes,
+which is a different security decision and not this one.
+
+`@xterm/xterm` is a dependency of `ui/` only, so it never reaches the npm
+package or a `npx tmux-mcp` start.
+
 ## What this drops
 
-- **The terminal view.** No xterm, no `@xterm/xterm`, no pane-content
-  streaming. The container cannot read pane content, and a container that
-  could would need everything this design just removed. If you want to look at
-  a pane, tmux is one keystroke away.
 - **The requests directory as the primary path.** It stays as the fallback and
   as the CLI's contract.
 
@@ -179,6 +216,11 @@ with `--ui-url`.
 - Validation: an answer naming a pane outside the scope is refused and the
   request stays open.
 - Container: the image builds, serves the page, and accepts an agent socket.
+- Version skew: a `hello` with a different major protocol version is refused
+  with a message naming both versions, and the request falls back to the file
+  path.
+- Watching: `watch` streams a pane's content and stops on `watch: null`; a
+  pane that is not a candidate is refused.
 
 ## Files
 
@@ -199,3 +241,5 @@ with `--ui-url`.
 2. **Container.** Dockerfile, compose, token handling, the published port,
    documentation.
 3. **Pool.** Pre-assigned entries, matching, auto-assignment, undo.
+4. **Watching a pane.** `watch` / `pane-output`, xterm.js in the UI, the
+   capture loop and its change detection on the host.
