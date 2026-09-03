@@ -451,3 +451,41 @@ test('every handshake re-offers the grants, so a restarted dispatch relearns the
     }
   });
 });
+
+test('a refused check drops the grant, the same way a revoke does', async () => {
+  const held = new Map([
+    ['%3', { target: '%3', kind: 'pane', label: '%3  a', since: 1 }],
+    ['%4', { target: '%4', kind: 'pane', label: '%4  b', since: 2 }],
+  ]);
+  await withFakeUi(
+    (socket, message) => {
+      if (message.type === 'hello') {
+        socket.send(JSON.stringify({ type: 'welcome', protocolVersion: PROTOCOL_VERSION }));
+      }
+      if (message.type === 'check') {
+        socket.send(JSON.stringify({ type: 'verdict', id: message.id, allowed: false }));
+      }
+    },
+    async ui => {
+      const agent = makeAgent(ui.url, {
+        listGrants: () => [...held.values()],
+        onRevoke: target => held.delete(target),
+      });
+      try {
+        assert.equal(await agent.confirm('%3'), false);
+        assert.equal(held.has('%3'), false, 'a pane we were refused is no longer ours');
+
+        const deadline = Date.now() + 4000;
+        let last;
+        while (Date.now() < deadline) {
+          last = ui.received.filter(m => m.type === 'grants').at(-1);
+          if (last && last.grants.length === 1) break;
+          await new Promise(r => setTimeout(r, 20));
+        }
+        assert.deepEqual(last?.grants.map(g => g.target), ['%4'], 'and dispatch should be told');
+      } finally {
+        agent.stop();
+      }
+    }
+  );
+});

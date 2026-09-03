@@ -148,6 +148,12 @@ export class AgentSocket {
       timer.unref?.();
       this.pendingChecks.set(id, allowed => {
         clearTimeout(timer);
+        // A refusal is a revoke we happened to learn about by asking, so it
+        // costs us the grant just the same.
+        if (!allowed) {
+          this.options.onRevoke?.(target);
+          this.reportGrants();
+        }
         resolve(allowed);
       });
       this.send({ type: 'check', id, target });
