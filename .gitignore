@@ -7,3 +7,8 @@ build/
 .worktrees/
 test-configs/requests/
 .playwright-mcp/
+
+# Scratch scripts used to drive a live dispatch during development.
+stage-demo.mjs
+probe-*.mjs
+proof-*.mjs
