@@ -14,6 +14,7 @@ import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswe
 import type { Answer, PaneRequest } from './requests.js';
 import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
 import { spawnAssignHook } from './assign-hook.js';
+import { AgentSocket } from './agent-socket.js';
 
 // Default split direction for split-pane and new-pane tools
 let defaultSplitDirection: 'horizontal' | 'vertical' = 'horizontal';
@@ -109,6 +110,9 @@ const server = new McpServer({
 // Resolved in main(); the request-pane tool only runs after connect().
 let requestsDir = '';
 let assignHookPath: string | undefined;
+// The control UI, when one is configured. Null means every request is
+// answered through the requests directory and the grant CLI.
+let agentSocket: AgentSocket | null = null;
 const REQUEST_EXPIRY_MS = 30 * 60 * 1000;
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 30;
 // Channel teardown functions per request id, run once the request settles.
@@ -129,6 +133,27 @@ async function notifyAttachedClients(request: PaneRequest): Promise<void> {
   } catch {
     // No tmux server or no attached client: the other channels still work.
   }
+}
+
+/**
+ * Answer a request on behalf of the control UI. The UI can only name a
+ * target; whether that target may be assigned is decided here, by the same
+ * answerRequest() the CLI and the hooks go through.
+ */
+async function answerFromUi(
+  id: string,
+  answer: { target: string } | { deny: true; reason?: string }
+): Promise<{ ok: true; target: string } | { ok: false; error: string }> {
+  const accepted = await answerRequest(id, 'target' in answer
+    ? { status: 'granted', target: answer.target, via: 'ui' }
+    : { status: 'denied', reason: answer.reason, via: 'ui' });
+
+  if (accepted) {
+    return 'target' in answer
+      ? { ok: true, target: answer.target }
+      : { ok: true, target: '' };
+  }
+  return { ok: false, error: getLastRefusal() ?? 'the request is no longer open' };
 }
 
 function cleanupRequest(id: string): void {
@@ -900,6 +925,17 @@ if (humanAssigned) {
 
           const created = request;
           const cleanups: Array<() => void> = [];
+          if (agentSocket && !agentSocket.givenUp) {
+            agentSocket.offer({
+              id: created.id,
+              reason: created.reason,
+              kind: created.kind,
+              createdAt: created.createdAt,
+              expiresAt: created.createdAt + REQUEST_EXPIRY_MS,
+              candidates: created.candidates.map(c => ({ id: c.id, label: c.label })),
+            });
+            cleanups.push(() => agentSocket?.withdraw(created.id, 'answered_elsewhere'));
+          }
           if (assignHookPath) {
             cleanups.push(spawnAssignHook(assignHookPath, created, requestsDir, answer => {
               void answerRequest(created.id, answer);
@@ -1750,7 +1786,9 @@ async function main() {
         'client-timeout-seconds': { type: 'string' },
         'human-assigned': { type: 'boolean', default: false },
         'assign-hook': { type: 'string' },
-        'requests-dir': { type: 'string' }
+        'requests-dir': { type: 'string' },
+        'ui-url': { type: 'string' },
+        'ui-token': { type: 'string' }
       }
     });
 
@@ -1768,6 +1806,24 @@ async function main() {
     initHumanAssigned(humanAssigned);
     requestsDir = resolveRequestsDir(values['requests-dir'] as string | undefined);
     assignHookPath = (values['assign-hook'] as string | undefined) ?? process.env.TMUX_MCP_ASSIGN_HOOK;
+
+    const uiUrl = (values['ui-url'] as string | undefined) ?? process.env.TMUX_MCP_UI_URL;
+    if (humanAssigned && uiUrl) {
+      agentSocket = new AgentSocket({
+        url: uiUrl,
+        token: (values['ui-token'] as string | undefined) ?? process.env.TMUX_MCP_UI_TOKEN,
+        scope: getScopeMode(),
+        clientVersion: 'tmux-mcp/0.2.3',
+        onAnswer: answerFromUi,
+        onRefresh: async id => {
+          const request = getRequest(id);
+          if (!request) return [];
+          const candidates = await buildCandidates(request.kind);
+          return candidates.map(c => ({ id: c.id, label: c.label }));
+        },
+        log: logToClient,
+      });
+    }
 
 
     // Initialize default split direction
@@ -1854,6 +1910,7 @@ async function main() {
 
     const shutdown = () => {
       try { watcher.stop(); } catch { /* ignore */ }
+      try { agentSocket?.stop(); } catch { /* ignore */ }
     };
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);

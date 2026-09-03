@@ -113,10 +113,17 @@ A request is answered outside the agent's client — the agent is in none of
 these paths, so it cannot answer its own request:
 
 1. **The control UI** — a separate service, in its own repository:
-   [tmux-mcp-ui](https://github.com/frankhommers/tmux-mcp-ui). It never runs
-   tmux and mounts nothing: this server dials out to it over a WebSocket and
-   carries the pane candidates with it, which is what makes hosting it
-   possible. Being built; the two channels below work today.
+   [tmux-mcp-ui](https://github.com/frankhommers/tmux-mcp-ui). Point this
+   server at it with `--ui-url` and it dials out over a WebSocket, carrying
+   the pane candidates with it. The UI never runs tmux and mounts nothing,
+   which is what makes hosting it possible — and because the connection is
+   outbound, nothing on your machine listens and it works from behind any
+   router.
+
+   The socket is open only while a request is pending. If the UI is
+   unreachable, refuses the connection, or speaks a different protocol major,
+   the request still lands in the requests directory and the channels below
+   answer it. See `docs/protocol.md` for the wire contract.
 
 2. **The CLI** — from any shell, including over SSH:
 
