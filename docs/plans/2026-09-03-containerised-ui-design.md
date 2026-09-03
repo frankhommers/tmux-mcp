@@ -7,6 +7,10 @@ nothing about tmux, and let the MCP server — which already runs on the host,
 inside tmux's world — do all the tmux work and hand the UI everything it
 needs over a WebSocket it opens itself.
 
+The service is meant to be reachable publicly, so a request can be answered
+from a phone. That works because the connection is outbound: a laptop behind
+any router or firewall reaches the service, and nothing on the laptop listens.
+
 This replaces the shared requests directory as the *primary* transport. That
 directory stays as the offline fallback (`tmux-mcp grant`), so nothing is lost
 when the container is not running.
@@ -64,7 +68,7 @@ Server → UI:
 | `hello` | server pid, cwd, tmux session name, scope summary, protocol version |
 | `request` | request id, reason, kind, candidates (id + label), createdAt |
 | `candidates` | request id, refreshed candidate list (answer to `refresh`) |
-| `pane-output` | pane id, the pane's current screen including escapes |
+| `pane-output` | pane id, the pane's current screen including escapes (parked) |
 | `withdraw` | request id, why (expired, answered elsewhere, server shutting down) |
 
 UI → server (over the same socket):
@@ -73,7 +77,7 @@ UI → server (over the same socket):
 |---|---|
 | `answer` | request id, `{ target }` or `{ deny, reason }` |
 | `refresh` | request id — asks for a fresh candidate list |
-| `watch` | pane id, or null to stop — start streaming that pane's screen |
+| `watch` | pane id, or null to stop — start streaming that pane's screen (parked) |
 
 The server validates every answer exactly as it does today (exists now, inside
 `--scope`, not the server's own pane). The UI cannot widen anyone's access; it
@@ -131,41 +135,87 @@ the repo layout. `hello` therefore carries a protocol version:
   the server falls back to the requests directory. It never half-speaks a
   protocol it does not know.
 
+## Authentication
+
+Two audiences, two mechanisms, one account.
+
+**The human, in a browser: GitHub OAuth.** No passwords to store and no mail
+to send. The account is the GitHub user id; the browser keeps an httpOnly,
+secure, `SameSite=Lax` session cookie.
+
+**The machine, over the WebSocket: a device token.** Created by pairing, so a
+secret is never pasted into a config file by hand:
+
+```
+$ tmux-mcp ui-login --url https://tmux.example.com
+Open https://tmux.example.com/link and enter: WQ7F-2K9P
+Waiting… paired with frankhommers. Token stored in ~/.tmux-mcp/credentials.json
+```
+
+A standard device-code flow: the CLI asks for a code, prints it, and polls
+while you confirm it in the browser you are already signed into. The token is
+opaque and random, stored hashed on the server and `0600` on the host. The
+socket presents it as `Authorization: Bearer …` during the handshake.
+
+Every request a device sends belongs to that device's account, and an inbox
+only ever shows one account's requests. A device can be revoked from the UI,
+which drops its socket immediately.
+
 ## Deployment
 
-The container runs the same code as `tmux-mcp ui`; it is a packaging choice,
-not a second implementation. Someone without Docker keeps running it on the
-host and everything works the same way.
+One image, two auth modes, so the same service runs on a laptop and in public:
+
+| `AUTH_MODE` | Who may connect | For |
+|---|---|---|
+| `token` | anyone with `TMUX_MCP_UI_TOKEN` | a single user, on `127.0.0.1` |
+| `github` | signed-in GitHub accounts, paired devices | the public deployment |
+
+The inbox, the pool and the protocol are the same code in both; only the
+adapter that answers "which account is this?" differs.
 
 ```yaml
 services:
   tmux-mcp-ui:
     image: ghcr.io/frankhommers/tmux-mcp-ui
-    ports: ["127.0.0.1:7676:7676"]
     environment:
-      TMUX_MCP_UI_TOKEN: "…"       # shared with the MCP server
-    volumes:
-      - tmux-mcp-ui:/data          # the pool survives a restart
+      AUTH_MODE: github
+      PUBLIC_URL: https://tmux.example.com
+      GITHUB_CLIENT_ID: "…"
+      GITHUB_CLIENT_SECRET: "…"
+      SESSION_SECRET: "…"
+      DATABASE_PATH: /data/tmux-mcp.db
+    volumes: [tmux-mcp-ui:/data]
 volumes:
   tmux-mcp-ui:
 ```
 
-- Published on `127.0.0.1` only, so the port is not on the network.
-- `TMUX_MCP_UI_TOKEN` authenticates both the browser and the MCP server's
-  WebSocket. Generated and printed on first start when unset.
-- The image contains no tmux and mounts nothing from the host.
+TLS is terminated by whatever sits in front (Caddy, Traefik, the platform's
+router); the service speaks plain HTTP behind it and requires
+`X-Forwarded-Proto: https` when `PUBLIC_URL` is https, so it cannot be run
+naked by accident.
+
+State is a single SQLite file: accounts, device tokens (hashed), and pool
+entries. Pending requests live in memory — they belong to an open socket and
+must not outlive it.
+
+Limits, because the endpoint is public: a cap on pending requests per account,
+on devices per account, and a rate limit on the device-code and OAuth
+endpoints.
 
 New MCP server flags:
 
 | Flag | Env | Default | Meaning |
 |---|---|---|---|
-| `--ui-url=<url>` | `TMUX_MCP_UI_URL` | — | Where to dial. Setting it replaces the auto-spawned local daemon. |
-| `--ui-token=<token>` | `TMUX_MCP_UI_TOKEN` | — | Sent on connect. |
+| `--ui-url=<url>` | `TMUX_MCP_UI_URL` | — | Where to dial (`wss://…/agent`). Replaces the local daemon. |
+| `--ui-token=<token>` | `TMUX_MCP_UI_TOKEN` | from `credentials.json` | Device token, or the shared token in `token` mode. |
 
-`--ui` keeps its meaning for the host-local daemon, and is mutually exclusive
+`--ui` keeps its meaning for the host-local daemon and is mutually exclusive
 with `--ui-url`.
 
-## Watching a pane
+## Watching a pane (parked)
+
+Not being built now, but the protocol leaves room for it and it costs nothing
+to keep the door open.
 
 Read-only, and possible precisely because the host holds the connection: the
 container never reads pane content, the host sends it.
@@ -194,14 +244,26 @@ package or a `npx tmux-mcp` start.
 
 ## Security notes
 
-- Nothing on the host listens. The only listening socket is the container's,
-  published on loopback.
-- The token guards both the browser and the agent socket. A process that can
-  reach the port and knows the token can *offer* answers, but every answer is
-  validated by the server that asked, against its own scope.
-- The pool is the one place where a human decision is made in advance. It is
-  stored in the container's volume, and the UI shows every auto-assignment it
-  makes, so a pool that is too broad is visible rather than silent.
+- Nothing on the host listens, wherever the service runs. The laptop only
+  makes outbound connections.
+- Every answer is validated by the server that asked, against its own scope
+  and against live tmux state. A compromised service can offer a target; it
+  cannot widen what an agent may touch beyond that server's scope, and it
+  cannot run anything itself.
+- **What a public deployment does see**, deliberately, because choosing a pane
+  needs it: session and window names, pane titles, working directories and
+  running commands. That is real information about what you are working on,
+  sitting on a hosted machine. It is the accepted cost of answering from a
+  phone.
+- What it can do with a request is bounded but not nothing: assigning a pane
+  decides where an agent will work. Hence device tokens rather than a shared
+  secret, per-account isolation, and revocation that drops the socket.
+- The pool is the one place where a human decision is made in advance. Every
+  auto-assignment is shown in the inbox, so a pool that is too broad is
+  visible rather than silent.
+- Not end-to-end encrypted. The service reads what it relays. Making it blind
+  is possible — the host and browser could share a key from pairing — but it
+  moves pool matching out of the service and is a project of its own.
 
 ## Testing
 
@@ -219,8 +281,9 @@ package or a `npx tmux-mcp` start.
 - Version skew: a `hello` with a different major protocol version is refused
   with a message naming both versions, and the request falls back to the file
   path.
-- Watching: `watch` streams a pane's content and stops on `watch: null`; a
-  pane that is not a candidate is refused.
+- Auth: an unpaired device is refused; a revoked device's socket drops; one
+  account never sees another's requests.
+- Pairing: the device-code flow completes, expires, and cannot be replayed.
 
 ## Files
 
@@ -229,17 +292,21 @@ package or a `npx tmux-mcp` start.
 - `src/ui/protocol.ts` (new) — message types shared by both ends
 - `src/index.ts` — `--ui-url`, `--ui-token`, dial on request, fall back to the
   file path
-- `ui/` — the container's server gains `/agent` (WebSocket) and the pool
-- `ui/src/` — pool editing, auto-assignment feedback in the inbox
+- `ui/server/` (new) — the service: agent sockets, browser SSE, auth adapters
+  (`token`, `github`), device pairing, SQLite
+- `ui/src/` — pool editing, auto-assignment feedback, sign-in
 - `Dockerfile`, `docker-compose.yml` (new)
 - `README.md` — deployment and the two ways to run the UI
 
 ## Milestones
 
 1. **Protocol and fallback.** The socket, the message flow, the file fallback,
-   the reconnect behaviour. The UI still shows requests as it does now.
-2. **Container.** Dockerfile, compose, token handling, the published port,
-   documentation.
-3. **Pool.** Pre-assigned entries, matching, auto-assignment, undo.
-4. **Watching a pane.** `watch` / `pane-output`, xterm.js in the UI, the
-   capture loop and its change detection on the host.
+   the reconnect behaviour. Runs against the local service in `token` mode, so
+   it is useful before anything is hosted.
+2. **The service and its image.** One server with pluggable auth, the
+   container, `token` mode end to end.
+3. **Public deployment.** GitHub OAuth, device pairing, per-account isolation,
+   revocation, rate limits, TLS expectations.
+4. **Pool.** Pre-assigned entries, matching, auto-assignment, undo.
+
+Parked: watching a pane.
