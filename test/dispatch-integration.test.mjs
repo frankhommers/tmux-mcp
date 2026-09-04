@@ -311,3 +311,46 @@ test('a pane dispatch has since revoked is refused at the next action', async ()
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });
+
+test('a pane typed in by hand is still described properly', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
+  await executeTmux(['new-session', '-d', '-s', sessionName]);
+  let typedPane = null;
+  try {
+    await withServerAndUi(async ({ client, waitFor }) => {
+      const pending = client.callTool({
+        name: 'request-pane',
+        arguments: { reason: 'typed by hand', timeoutSeconds: 20 },
+      });
+      const request = await waitFor('request');
+
+      // Opened after the request, so the human can only have typed its id.
+      const window = await executeTmux(['new-window', '-d', '-t', sessionName, '-P', '-F', '#{window_id}']);
+      typedPane = await executeTmux(['list-panes', '-t', window, '-F', '#{pane_id}']);
+      assert.ok(!request.candidates.some(c => c.id === typedPane), 'it must not be in the list');
+
+      // The first report carries the bare id; the description follows once
+      // tmux has been asked about it.
+      const report = await waitFor('grants', 8000,
+        m => m.grants.some(g => g.target === typedPane && g.label !== typedPane));
+      const grant = report.grants.find(g => g.target === typedPane);
+      assert.ok(grant.label.includes(sessionName),
+        `a typed pane deserves the same description as a picked one, got ${grant.label}`);
+
+      await pending;
+    }, {
+      behaviour: (socket, message) => {
+        // Answer with the late pane the moment it exists, as typing it would.
+        if (message.type === 'request') {
+          const wait = setInterval(() => {
+            if (!typedPane) return;
+            clearInterval(wait);
+            socket.send(JSON.stringify({ type: 'answer', id: message.id, target: typedPane }));
+          }, 100);
+        }
+      },
+    });
+  } finally {
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});

@@ -124,6 +124,28 @@ function describeTarget(target: string, request: PaneRequest): string {
   return request.candidates.find(candidate => candidate.id === target)?.label ?? target;
 }
 
+/**
+ * A target typed in by hand is not in the offered list, so ask tmux what it is
+ * rather than showing a bare `%3`. Runs after the grant is recorded, hence
+ * asking tmux directly instead of rebuilding the candidate list, which skips
+ * everything already granted.
+ */
+async function describeGrantedTarget(target: string, kind: 'pane' | 'window'): Promise<string | null> {
+  try {
+    const panes = await tmux.listAllPanes();
+    if (kind === 'pane') {
+      const pane = panes.find(p => p.paneId === target);
+      return pane
+        ? `${pane.paneId}  ${pane.sessionName}:${pane.windowName}.${pane.paneIndex}  ${pane.currentCommand}  "${pane.title}"`
+        : null;
+    }
+    const inWindow = panes.find(p => p.windowId === target);
+    return inWindow ? `${inWindow.windowId}  ${inWindow.sessionName}:${inWindow.windowName}` : null;
+  } catch {
+    return null;
+  }
+}
+
 // The dispatch service, when one is configured. Null means every request is
 // answered through the requests directory and the grant CLI.
 let agentSocket: AgentSocket | null = null;
@@ -1901,13 +1923,18 @@ async function main() {
             windowId: answer.windowId,
             sessionId: answer.sessionId,
           });
-          grantContext.set(answer.target, {
-            label: describeTarget(answer.target, request),
-            reason: request.reason,
-          });
+          const context = { label: describeTarget(answer.target, request), reason: request.reason };
+          grantContext.set(answer.target, context);
           logToClient('info', `assigned ${answer.target} via ${answer.via}`);
           try { server.sendResourceListChanged(); } catch { /* ignore */ }
           agentSocket?.reportGrants();
+          if (context.label === answer.target) {
+            void describeGrantedTarget(answer.target, request.kind).then(label => {
+              if (!label || grantContext.get(answer.target) !== context) return;
+              context.label = label;
+              agentSocket?.reportGrants();
+            });
+          }
         }
         cleanupRequest(id);
       });
