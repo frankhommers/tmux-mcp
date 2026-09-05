@@ -10,7 +10,7 @@ own types and agree at runtime through `PROTOCOL_VERSION`.
 
 ## Version
 
-`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.2`**.
+`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.3`**.
 
 - Equal majors connect. A higher minor on either side is fine: unknown
   message types and unknown fields are ignored.
@@ -41,7 +41,7 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 ```json
 {
   "type": "hello",
-  "protocolVersion": "1.2",
+  "protocolVersion": "1.3",
   "agent": {
     "instanceId": "0f0d8f6c-6a1f-4a3e-9a02-2b0e2f9a1d77",
     "pid": 4711,
@@ -72,12 +72,18 @@ A pane request that needs a human.
   "expiresAt": 1788392136742,
   "candidates": [
     { "id": "%3", "label": "%3  app:code.1  zsh  \"~/Repos/app\"" }
-  ]
+  ],
+  "suggested": "%56"
 }
 ```
 
 `candidates` is a snapshot. It is advisory: the human may answer with any
 pane that exists when they answer, and the MCP server validates it then.
+
+`suggested` is an optional target the agent already has in mind, for instance
+because a human named it in the task. It is a hint shown next to the request:
+it grants nothing, is never matched automatically, and the human remains free
+to answer with something else.
 
 ### `candidates`
 
@@ -148,7 +154,7 @@ own grant, so a slow or absent dispatch cannot block work.
 ### `welcome`
 
 ```json
-{ "type": "welcome", "protocolVersion": "1.2", "account": "frankhommers" }
+{ "type": "welcome", "protocolVersion": "1.3", "account": "frankhommers" }
 ```
 
 ### `refuse`
