@@ -354,3 +354,27 @@ test('a pane typed in by hand is still described properly', async () => {
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });
+
+test('an agent that already knows which pane it wants may suggest it', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
+  const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+  try {
+    await withServerAndUi(async ({ client, waitFor }) => {
+      const pending = client.callTool({
+        name: 'request-pane',
+        arguments: { reason: 'the deploy already runs there', suggest: paneId, timeoutSeconds: 3 },
+      });
+
+      const request = await waitFor('request');
+      assert.equal(request.suggested, paneId, 'the suggestion should travel with the request');
+
+      // A suggestion is not an assignment: nothing is usable until a human says so.
+      const denied = await client.callTool({ name: 'capture-pane', arguments: { paneId } });
+      assert.ok(denied.isError, 'suggesting a pane must not hand it over');
+
+      await pending;
+    });
+  } finally {
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});

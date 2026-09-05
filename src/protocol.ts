@@ -8,7 +8,7 @@
  */
 
 /** "<major>.<minor>". Same major connects; different major refuses. */
-export const PROTOCOL_VERSION = '1.2';
+export const PROTOCOL_VERSION = '1.3';
 
 export function protocolMajor(version: string): string {
   return version.split('.')[0] ?? '';
@@ -58,6 +58,8 @@ export type ServerToDispatch =
       createdAt: number;
       expiresAt: number;
       candidates: WireCandidate[];
+      /** A target the agent would like. A hint for the human, nothing more. */
+      suggested?: string;
     }
   | { type: 'candidates'; id: string; candidates: WireCandidate[] }
   | { type: 'withdraw'; id: string; why: 'expired' | 'answered_elsewhere' | 'shutdown' }

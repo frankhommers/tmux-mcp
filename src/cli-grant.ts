@@ -70,7 +70,8 @@ export async function runGrantCli(argv: string[]): Promise<number> {
     }
     for (const request of requests) {
       const ageSeconds = Math.round((Date.now() - request.createdAt) / 1000);
-      console.log(`${request.id}  (${ageSeconds}s ago, ${request.kind})  ${request.reason}`);
+      const suggested = request.suggested ? `  [agent suggests ${request.suggested}]` : '';
+      console.log(`${request.id}  (${ageSeconds}s ago, ${request.kind})  ${request.reason}${suggested}`);
       // Listed live, so a pane opened since the request shows up here.
       const targets = await liveTargets(request);
       for (const target of targets) {

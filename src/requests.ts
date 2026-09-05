@@ -66,6 +66,11 @@ export interface PaneRequest {
   pid: number;
   /** Advisory snapshot of what existed when the agent asked. */
   candidates: Candidate[];
+  /**
+   * A target the agent would like, when it already knows which one. Purely a
+   * hint for the human: it grants nothing and is never matched automatically.
+   */
+  suggested?: string;
   scope: RequestScope;
   createdAt: number;
 }
@@ -187,13 +192,19 @@ function isInStaticScopeForCandidate(windowId: string, sessionId: string): boole
   return getAllowedWindowId() === windowId;
 }
 
-export function createRequest(reason: string, kind: GrantKind, candidates: Candidate[]): PaneRequest {
+export function createRequest(
+  reason: string,
+  kind: GrantKind,
+  candidates: Candidate[],
+  suggested?: string
+): PaneRequest {
   const request: PaneRequest = {
     id: `r-${randomBytes(4).toString('hex')}`,
     reason,
     kind,
     pid: process.pid,
     candidates,
+    ...(suggested ? { suggested } : {}),
     scope: {
       mode: getScopeMode(),
       sessionIds: [...getAllowedSessionIds()],

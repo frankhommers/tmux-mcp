@@ -54,6 +54,7 @@ interface OpenRequest {
   createdAt: number;
   expiresAt: number;
   candidates: WireCandidate[];
+  suggested?: string;
 }
 
 const BACKOFF_START_MS = 1000;

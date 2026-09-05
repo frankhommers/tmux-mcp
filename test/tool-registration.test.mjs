@@ -206,7 +206,7 @@ test('human-assigned mode registers request-pane and drops creation tools', asyn
 
     const requestTool = tools.find(tool => tool.name === 'request-pane');
     assert.deepEqual(Object.keys(requestTool.inputSchema.properties ?? {}).sort(), [
-      'reason', 'kind', 'timeoutSeconds', 'requestId',
+      'reason', 'kind', 'timeoutSeconds', 'requestId', 'suggest',
     ].sort());
     assert.deepEqual([...(requestTool.inputSchema.required ?? [])], ['reason']);
     assert.match(requestTool.description ?? '', /start with access to nothing/i);

@@ -124,3 +124,25 @@ test('grant on an unknown request fails cleanly', async () => {
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });
+
+test('requests shows what the agent suggested, marked as its own', async () => {
+  const sessionName = `tmux-mcp-cli-${process.pid}-${randomUUID()}`;
+  const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+  const dir = await mkdtemp(join(tmpdir(), 'tmux-mcp-cli-'));
+  await writeFile(join(dir, 'r-sug123.json'), JSON.stringify({
+    id: 'r-sug123',
+    reason: 'the deploy already runs there',
+    kind: 'pane',
+    createdAt: Date.now(),
+    candidates: [],
+    suggested: paneId,
+    scope: { mode: 'none', sessionIds: [], windowId: null, excludedPaneId: null },
+  }), { mode: 0o600 });
+  try {
+    const { stdout } = await cli(dir, ['requests']);
+    assert.match(stdout, new RegExp(`suggests ${paneId.replace('%', '\\%')}`),
+      `the suggestion should be visible from the shell too, got:\n${stdout}`);
+  } finally {
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});

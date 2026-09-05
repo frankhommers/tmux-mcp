@@ -924,9 +924,10 @@ if (humanAssigned) {
       reason: z.string().min(1).max(200).describe("Why you need the pane. Shown to the human verbatim, so be specific: 'run the test suite', 'tail the dev server log'."),
       kind: z.enum(["pane", "window"]).optional().describe("Ask for a single pane (default) or a whole window (every pane inside it becomes usable)."),
       timeoutSeconds: z.number().min(1).optional().describe(`How long to wait for the human before returning Status: pending. Default ${DEFAULT_REQUEST_TIMEOUT_SECONDS}s.`),
+      suggest: z.string().regex(/^[%@]?\d+$/).optional().describe("A pane id like '%56' you already know you want, e.g. because the human named it. Shown to them as a suggestion; they still choose, and this grants nothing by itself."),
       requestId: z.string().optional().describe("Poll an earlier request that returned Status: pending. When set, `reason` is ignored and no new request is created."),
     },
-    async ({ reason, kind, timeoutSeconds, requestId }) => {
+    async ({ reason, kind, timeoutSeconds, requestId, suggest }) => {
       try {
         expireRequests(REQUEST_EXPIRY_MS);
         const waitSeconds = timeoutSeconds ?? DEFAULT_REQUEST_TIMEOUT_SECONDS;
@@ -954,7 +955,12 @@ if (humanAssigned) {
               isError: true,
             };
           }
-          request = createRequest(reason, requestKind, candidates);
+          // Someone reading an id off their screen types the number; accept
+          // that from an agent too rather than refusing a useful hint.
+          const suggested = suggest
+            ? (/^\d+$/.test(suggest) ? `${requestKind === 'window' ? '@' : '%'}${suggest}` : suggest)
+            : undefined;
+          request = createRequest(reason, requestKind, candidates, suggested);
           await writeRequestFile(requestsDir, request);
           void notifyAttachedClients(request);
           logToClient('info', `pane request ${request.id}: ${reason}`);
@@ -969,6 +975,7 @@ if (humanAssigned) {
               createdAt: created.createdAt,
               expiresAt: created.createdAt + REQUEST_EXPIRY_MS,
               candidates: created.candidates.map(c => ({ id: c.id, label: c.label })),
+              suggested: created.suggested,
             });
             cleanups.push(() => agentSocket?.withdraw(created.id, 'answered_elsewhere'));
           }
