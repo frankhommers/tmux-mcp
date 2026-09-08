@@ -66,6 +66,17 @@ export async function executeTmux(args: string[]): Promise<string> {
 }
 
 /**
+ * Identify the tmux server we are talking to, as `socket:pid:start_time`.
+ *
+ * Pane ids are only unique and stable within one server instance: a restarted
+ * server starts numbering at %0 again. Anything that remembers an id across
+ * time has to remember which server it meant.
+ */
+export async function tmuxServerFingerprint(): Promise<string> {
+  return executeTmux(['display-message', '-p', '#{socket_path}:#{pid}:#{start_time}']);
+}
+
+/**
  * Check if tmux server is running
  */
 export async function isTmuxRunning(): Promise<boolean> {

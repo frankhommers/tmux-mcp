@@ -221,3 +221,15 @@ test('no elicitation is sent, even to a client that supports it', async () => {
   }
 });
 
+
+test('the tmux fingerprint names the server we are talking to, and is stable', async () => {
+  const { tmuxServerFingerprint } = await import('../build/tmux.js');
+  const first = await tmuxServerFingerprint();
+  const [socket, pid, startedAt] = first.split(':');
+  assert.ok(socket.startsWith('/'), `expected a socket path, got ${socket}`);
+  assert.match(pid, /^\d+$/);
+  assert.match(startedAt, /^\d+$/);
+  // Nothing restarted in between, so asking twice must agree: this is what a
+  // grant's validity hangs on.
+  assert.equal(await tmuxServerFingerprint(), first);
+});

@@ -21,7 +21,35 @@ export interface GrantRecord {
 
 const grants = new Map<string, GrantRecord>();
 
-export function addGrant(record: GrantRecord): void {
+/**
+ * The tmux server these grants were made against, as `socket:pid:start_time`.
+ *
+ * A pane id only means something inside one server instance: a restarted
+ * server hands the same numbers out again, so a grant made against the old one
+ * would silently come to point at a pane no human ever gave us.
+ */
+let servedBy: string | null = null;
+
+/**
+ * Say which tmux server we are talking to. Returns the ids dropped because it
+ * is not the one the grants were made against; binding for the first time
+ * keeps everything, since that is the server they came from.
+ */
+export function bindGrantsToServer(fingerprint: string): string[] {
+  if (servedBy === fingerprint) return [];
+  const dropped = servedBy === null ? [] : [...grants.keys()];
+  if (servedBy !== null) grants.clear();
+  servedBy = fingerprint;
+  return dropped;
+}
+
+/**
+ * Record a grant, saying which tmux server it was made on. The server is not
+ * optional: a grant added before one was known would otherwise be adopted by
+ * whichever server happened to be running at the first action.
+ */
+export function addGrant(record: GrantRecord, fingerprint: string): void {
+  bindGrantsToServer(fingerprint);
   grants.set(record.id, { since: Date.now(), ...record });
 }
 
@@ -89,4 +117,5 @@ export function pruneGrants(
 /** Test helper: forget every grant. */
 export function resetGrants(): void {
   grants.clear();
+  servedBy = null;
 }

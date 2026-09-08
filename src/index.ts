@@ -209,7 +209,7 @@ async function autoGrantNewPane(paneId: string): Promise<void> {
   if (!humanAssigned) return;
   try {
     const { windowId, sessionId } = await tmux.getPaneLocation(paneId);
-    addGrant({ kind: 'pane', id: paneId, windowId, sessionId });
+    addGrant({ kind: 'pane', id: paneId, windowId, sessionId }, await tmux.tmuxServerFingerprint());
   } catch {
     logToClient('warning', `could not auto-grant new pane ${paneId}`);
   }
@@ -1923,13 +1923,13 @@ async function main() {
     if (humanAssigned) {
       // A granted request becomes a grant, and its channels are torn down.
       onRequestSettled((id: string, answer: Answer, request: PaneRequest) => {
-        if (answer.status === 'granted' && answer.windowId && answer.sessionId) {
+        if (answer.status === 'granted' && answer.windowId && answer.sessionId && answer.tmuxServer) {
           addGrant({
             kind: request.kind,
             id: answer.target,
             windowId: answer.windowId,
             sessionId: answer.sessionId,
-          });
+          }, answer.tmuxServer);
           const context = { label: describeTarget(answer.target, request), reason: request.reason };
           grantContext.set(answer.target, context);
           logToClient('info', `assigned ${answer.target} via ${answer.via}`);

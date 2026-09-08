@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { GrantKind } from './grants.js';
 import { isPaneGranted, isWindowGranted } from './grants.js';
-import { listAllPanes, getPaneLocation, executeTmux } from './tmux.js';
+import { listAllPanes, getPaneLocation, executeTmux, tmuxServerFingerprint } from './tmux.js';
 import {
   isExcludedPane,
   getScopeMode,
@@ -28,6 +28,8 @@ export type Answer =
       /** Filled in by answerRequest() once the target has been resolved. */
       windowId?: string;
       sessionId?: string;
+      /** The tmux server the target was resolved on, so a grant knows where it holds. */
+      tmuxServer?: string;
     }
   | { status: 'denied'; reason?: string; via: string };
 
@@ -40,7 +42,7 @@ export type Answer =
  * situation at the moment of answering.
  */
 export type TargetResolution =
-  | { ok: true; windowId: string; sessionId: string }
+  | { ok: true; windowId: string; sessionId: string; tmuxServer: string }
   | { ok: false; reason: string };
 
 export type TargetResolver = (target: string, kind: GrantKind) => Promise<TargetResolution>;
@@ -124,7 +126,9 @@ export const resolveTargetLive: TargetResolver = async (target, kind) => {
   if (!isInStaticScopeForCandidate(windowId, sessionId)) {
     return { ok: false, reason: `${kind} ${target} is outside the allowed scope` };
   }
-  return { ok: true, windowId, sessionId };
+  // Read here rather than at grant time: this is the server the ids were just
+  // resolved on, which is exactly what the grant will mean.
+  return { ok: true, windowId, sessionId, tmuxServer: await tmuxServerFingerprint() };
 };
 
 let targetResolver: TargetResolver = resolveTargetLive;
@@ -237,7 +241,12 @@ export async function answerRequest(id: string, answer: Answer): Promise<boolean
       lastRefusal = resolution.reason;
       return false;
     }
-    settled = { ...answer, windowId: resolution.windowId, sessionId: resolution.sessionId };
+    settled = {
+      ...answer,
+      windowId: resolution.windowId,
+      sessionId: resolution.sessionId,
+      tmuxServer: resolution.tmuxServer,
+    };
   }
   lastRefusal = null;
 

@@ -1,5 +1,5 @@
-import { executeTmux } from "./tmux.js";
-import { isPaneGranted, isWindowGranted, isSessionGranted, isWindowVisible } from "./grants.js";
+import { executeTmux, tmuxServerFingerprint } from "./tmux.js";
+import { isPaneGranted, isWindowGranted, isSessionGranted, isWindowVisible, bindGrantsToServer } from "./grants.js";
 
 type ScopeMode = 'none' | 'session' | 'window';
 
@@ -197,12 +197,35 @@ export function setActionConfirmer(confirmer: ActionConfirmer | null): void {
 }
 
 export async function assertInScope(id: string, type: 'pane' | 'window' | 'session'): Promise<void> {
+  if (humanAssigned) await dropGrantsFromAnotherServer();
   if (!(await isInScope(id, type))) {
     const scopeLabel = scopeMode === 'window' ? 'window' : 'session';
     throw new Error(`Access denied: ${type} ${id} is not in the allowed ${scopeLabel} scope.`);
   }
   if (humanAssigned && confirmAction && !(await confirmAction(id, type))) {
     throw new Error(`Access denied: ${type} ${id} was taken back.`);
+  }
+}
+
+/**
+ * A pane id means nothing outside the tmux server it was handed over on, and
+ * a restarted server hands the same numbers out again. Checked before every
+ * action rather than at startup, because tmux can restart under a long-lived
+ * server. A tmux we cannot reach changes nothing: there is nothing to act on.
+ */
+async function dropGrantsFromAnotherServer(): Promise<void> {
+  let fingerprint: string;
+  try {
+    fingerprint = await tmuxServerFingerprint();
+  } catch {
+    return;
+  }
+  const dropped = bindGrantsToServer(fingerprint);
+  if (dropped.length > 0) {
+    throw new Error(
+      `Access denied: the tmux server restarted, so ${dropped.join(', ')} no longer refer to ` +
+      'what a human handed over. Ask for a pane again with request-pane.'
+    );
   }
 }
 
