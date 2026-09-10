@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
+import { tmuxServerFingerprint } from './tmux.js';
 import {
   PROTOCOL_VERSION,
   isCompatible,
@@ -183,9 +184,10 @@ export class AgentSocket {
     this.disconnect();
   }
 
-  private identity(): AgentIdentity {
+  private async identity(): Promise<AgentIdentity> {
     return {
       instanceId: this.instanceId,
+      tmuxServer: await tmuxServerFingerprint().catch(() => undefined),
       pid: process.pid,
       host: hostname(),
       cwd: process.cwd(),
@@ -222,7 +224,12 @@ export class AgentSocket {
     this.handshaken = false;
 
     socket.addEventListener('open', () => {
-      this.send({ type: 'hello', protocolVersion: PROTOCOL_VERSION, agent: this.identity() });
+      // Read per connection rather than once at startup: tmux can restart under
+      // a long-lived server, and a stale fingerprint would let a standing rule
+      // hand out an id that no longer means what a human decided it meant.
+      void this.identity().then(agent => {
+        this.send({ type: 'hello', protocolVersion: PROTOCOL_VERSION, agent });
+      });
     });
 
     socket.addEventListener('message', event => {

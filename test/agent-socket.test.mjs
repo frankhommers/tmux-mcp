@@ -540,3 +540,19 @@ test('a check still gets through when the previous socket is only just closing',
     }
   );
 });
+
+test('hello says which tmux server this agent is on', async () => {
+  await withFakeUi(acceptHandshake, async ui => {
+    const agent = makeAgent(ui.url, { listGrants: () => [] });
+    try {
+      agent.offer(REQUEST);
+      const hello = await ui.waitFor('hello');
+      // Read afresh per connection: tmux can restart under a long-lived server,
+      // and a stale fingerprint would let a rule hand out the wrong pane.
+      assert.match(hello.agent.tmuxServer, /^\/.+:\d+:\d+$/,
+        `expected socket:pid:start_time, got ${hello.agent.tmuxServer}`);
+    } finally {
+      agent.stop();
+    }
+  });
+});

@@ -10,7 +10,7 @@ own types and agree at runtime through `PROTOCOL_VERSION`.
 
 ## Version
 
-`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.3`**.
+`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.4`**.
 
 - Equal majors connect. A higher minor on either side is fine: unknown
   message types and unknown fields are ignored.
@@ -41,9 +41,10 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 ```json
 {
   "type": "hello",
-  "protocolVersion": "1.3",
+  "protocolVersion": "1.4",
   "agent": {
     "instanceId": "0f0d8f6c-6a1f-4a3e-9a02-2b0e2f9a1d77",
+    "tmuxServer": "/private/tmp/tmux-501/default:16186:1788462695",
     "pid": 4711,
     "host": "frank-mbp",
     "cwd": "/Users/frank/Repos/app",
@@ -57,6 +58,12 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 `instanceId` is stable for the lifetime of one MCP server process. It is how
 dispatch tells a reconnect from a new machine. Grants live in that process's
 memory, so a new id means the old grants died with the process that held them.
+
+`tmuxServer` is `socket_path:pid:start_time` of the tmux server this agent is
+talking to, read afresh on every connection. Pane ids are only unique within
+one server instance — a restarted server hands the same numbers out again — so
+anything that remembers an id across time has to remember which server it
+meant.
 
 ### `request`
 
@@ -154,7 +161,7 @@ own grant, so a slow or absent dispatch cannot block work.
 ### `welcome`
 
 ```json
-{ "type": "welcome", "protocolVersion": "1.3", "account": "frankhommers" }
+{ "type": "welcome", "protocolVersion": "1.4", "account": "frankhommers" }
 ```
 
 ### `refuse`
