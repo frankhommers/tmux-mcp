@@ -556,3 +556,17 @@ test('hello says which tmux server this agent is on', async () => {
     }
   });
 });
+
+test('hello names the client that started this server', async () => {
+  await withFakeUi(acceptHandshake, async ui => {
+    const agent = makeAgent(ui.url, { listGrants: () => [], mcpClient: () => 'opencode' });
+    try {
+      agent.offer(REQUEST);
+      const hello = await ui.waitFor('hello');
+      assert.equal(hello.agent.mcpClient, 'opencode',
+        'a pid alone does not tell a human which agent this is');
+    } finally {
+      agent.stop();
+    }
+  });
+});

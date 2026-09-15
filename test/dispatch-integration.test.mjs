@@ -378,3 +378,18 @@ test('an agent that already knows which pane it wants may suggest it', async () 
     await executeTmux(['kill-session', '-t', sessionName]);
   }
 });
+
+test('dispatch learns which MCP client runs the server', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
+  await executeTmux(['new-session', '-d', '-s', sessionName]);
+  try {
+    await withServerAndUi(async ({ client, waitFor }) => {
+      client.callTool({ name: 'request-pane', arguments: { reason: 'who am I', timeoutSeconds: 2 } }).catch(() => {});
+      const hello = await waitFor('hello');
+      // The name the client gave in the MCP handshake, verbatim.
+      assert.equal(hello.agent.mcpClient, 'ui-integration');
+    });
+  } finally {
+    await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});

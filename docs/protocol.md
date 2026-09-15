@@ -10,7 +10,7 @@ own types and agree at runtime through `PROTOCOL_VERSION`.
 
 ## Version
 
-`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.4`**.
+`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.5`**.
 
 - Equal majors connect. A higher minor on either side is fine: unknown
   message types and unknown fields are ignored.
@@ -41,10 +41,11 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 ```json
 {
   "type": "hello",
-  "protocolVersion": "1.4",
+  "protocolVersion": "1.5",
   "agent": {
     "instanceId": "0f0d8f6c-6a1f-4a3e-9a02-2b0e2f9a1d77",
     "tmuxServer": "/private/tmp/tmux-501/default:16186:1788462695",
+    "mcpClient": "opencode",
     "pid": 4711,
     "host": "frank-mbp",
     "cwd": "/Users/frank/Repos/app",
@@ -64,6 +65,10 @@ talking to, read afresh on every connection. Pane ids are only unique within
 one server instance — a restarted server hands the same numbers out again — so
 anything that remembers an id across time has to remember which server it
 meant.
+
+`mcpClient` is the name the MCP client gave in its `initialize` handshake,
+passed on verbatim. A pid tells a human nothing; the client that runs the
+agent, and the pane it runs in (`tmuxSession`), do.
 
 ### `request`
 
@@ -161,7 +166,7 @@ own grant, so a slow or absent dispatch cannot block work.
 ### `welcome`
 
 ```json
-{ "type": "welcome", "protocolVersion": "1.4", "account": "frankhommers" }
+{ "type": "welcome", "protocolVersion": "1.5", "account": "frankhommers" }
 ```
 
 ### `refuse`

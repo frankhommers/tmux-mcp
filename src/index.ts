@@ -1865,6 +1865,9 @@ async function main() {
         token: dispatchToken,
         scope: getScopeMode(),
         clientVersion: 'tmux-mcp/0.2.3',
+        // Known once the client has initialised, which is before any tool can
+        // make this server dial dispatch.
+        mcpClient: () => server.server.getClientVersion()?.name,
         onAnswer: answerFromDispatch,
         onRefresh: async id => {
           const request = getRequest(id);
