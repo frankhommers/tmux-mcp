@@ -289,6 +289,18 @@ export function onRequestSettled(listener: (id: string, answer: Answer, request:
   settledListeners.push(listener);
 }
 
+const expiredListeners: Array<(id: string) => void> = [];
+
+/**
+ * Called when a request is dropped for age. Forgetting it here is not enough:
+ * every channel it was offered on still shows it until it is told, and a human
+ * answering a request the server no longer has gets a refusal for their
+ * trouble.
+ */
+export function onRequestExpired(listener: (id: string) => void): void {
+  expiredListeners.push(listener);
+}
+
 /** Drop requests older than maxAgeMs. Returns the ids removed. */
 export function expireRequests(maxAgeMs: number): string[] {
   const now = Date.now();
@@ -297,6 +309,11 @@ export function expireRequests(maxAgeMs: number): string[] {
     if (now - entry.request.createdAt > maxAgeMs) {
       requests.delete(id);
       expired.push(id);
+    }
+  }
+  for (const id of expired) {
+    for (const listener of expiredListeners) {
+      try { listener(id); } catch { /* listener errors are not fatal */ }
     }
   }
   return expired;
@@ -317,6 +334,7 @@ export function isPending(id: string): boolean {
 export function resetRequests(): void {
   requests.clear();
   settledListeners.length = 0;
+  expiredListeners.length = 0;
   targetResolver = resolveTargetLive;
   lastRefusal = null;
 }

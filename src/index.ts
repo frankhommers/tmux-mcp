@@ -10,7 +10,7 @@ import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
 import { addGrant, listGrants, revokeGrant, pruneGrants } from './grants.js';
-import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, expireRequests, getLastRefusal } from './requests.js';
+import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, onRequestExpired, expireRequests, getLastRefusal } from './requests.js';
 import type { Answer, PaneRequest } from './requests.js';
 import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
 import { spawnAssignHook } from './assign-hook.js';
@@ -1921,6 +1921,12 @@ async function main() {
     await server.connect(transport);
 
     if (humanAssigned) {
+      // A request dropped for age is gone here but still on screen elsewhere.
+      onRequestExpired((id: string) => {
+        agentSocket?.withdraw(id, 'expired');
+        cleanupRequest(id);
+      });
+
       // A granted request becomes a grant, and its channels are torn down.
       onRequestSettled((id: string, answer: Answer, request: PaneRequest) => {
         if (answer.status === 'granted' && answer.windowId && answer.sessionId && answer.tmuxServer) {

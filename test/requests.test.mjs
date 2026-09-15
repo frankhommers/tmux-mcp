@@ -7,6 +7,7 @@ import {
   answerRequest,
   waitForAnswer,
   expireRequests,
+  onRequestExpired,
   resetRequests,
   setTargetResolver,
 } from '../build/requests.js';
@@ -129,4 +130,18 @@ test('expireRequests removes old requests', async () => {
   assert.deepEqual(expireRequests(60_000), []);
   assert.deepEqual(expireRequests(-1), [req.id]);
   assert.equal(getRequest(req.id), undefined);
+});
+
+test('an expiring request is announced, so the channels it went out on can drop it', () => {
+  resetRequests();
+  fakeResolver();
+  const gone = [];
+  onRequestExpired(id => gone.push(id));
+  const req = createRequest('run the tests', 'pane', CANDIDATES);
+
+  assert.deepEqual(expireRequests(60_000), []);
+  assert.deepEqual(gone, [], 'nothing expired, nothing to announce');
+
+  assert.deepEqual(expireRequests(-1), [req.id]);
+  assert.deepEqual(gone, [req.id], 'dispatch still shows it until it is told');
 });
