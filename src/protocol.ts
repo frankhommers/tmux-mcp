@@ -8,7 +8,7 @@
  */
 
 /** "<major>.<minor>". Same major connects; different major refuses. */
-export const PROTOCOL_VERSION = '1.5';
+export const PROTOCOL_VERSION = '1.6';
 
 export function protocolMajor(version: string): string {
   return version.split('.')[0] ?? '';
@@ -70,6 +70,8 @@ export type ServerToDispatch =
   | { type: 'result'; id: string; ok: true; target: string }
   | { type: 'result'; id: string; ok: false; error: string }
   | { type: 'grants'; grants: WireGrant[] }
+  | { type: 'inventory-changed' }
+  | { type: 'validation'; id: string; tmuxServer: string; missing: string[] }
   | { type: 'check'; id: string; target: string };
 
 export type DispatchToServer =
@@ -79,6 +81,7 @@ export type DispatchToServer =
   | { type: 'answer'; id: string; deny: true; reason?: string }
   | { type: 'refresh'; id: string }
   | { type: 'revoke'; target: string }
+  | { type: 'validate'; id: string; tmuxServer: string; targets: string[] }
   | { type: 'verdict'; id: string; allowed: boolean };
 
 /**
@@ -95,6 +98,13 @@ export function parseDispatchMessage(raw: string): DispatchToServer | null {
   if (typeof value !== 'object' || value === null) return null;
   const message = value as { type?: unknown; id?: unknown };
   switch (message.type) {
+    case 'validate': {
+      const frame = value as { tmuxServer?: unknown; targets?: unknown };
+      return typeof message.id === 'string' && typeof frame.tmuxServer === 'string'
+        && frame.tmuxServer.length > 0 && Array.isArray(frame.targets)
+        && frame.targets.every(target => typeof target === 'string' && /^[%@]\d+$/.test(target))
+        ? value as DispatchToServer : null;
+    }
     case 'welcome':
     case 'refuse':
       return message as DispatchToServer;

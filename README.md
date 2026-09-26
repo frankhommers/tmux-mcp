@@ -134,7 +134,11 @@ these paths, so it cannot answer its own request:
    a shared-token deployment. Revoke a machine from dispatch and its socket
    drops.
 
-   The socket is open only while a request is pending. If dispatch is
+   The socket is open while a request is pending or briefly to report grants
+   and validate saved pane/window ids. Inventory changes trigger validation;
+   a check every 30 seconds catches missed changes. With protocol 1.6 on both
+   sides, confirmed missing ids lose their saved assignments and pin rules.
+   An unavailable tmux server is not treated as empty. If dispatch is
    unreachable, refuses the connection, or speaks a different protocol major,
    the request still lands in the requests directory and the channels below
    answer it. See `docs/protocol.md` for the wire contract.

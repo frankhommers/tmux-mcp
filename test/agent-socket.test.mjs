@@ -557,6 +557,52 @@ test('hello says which tmux server this agent is on', async () => {
   });
 });
 
+test('inventory inspection stays connected until the live lookup finishes', async () => {
+  await withFakeUi((socket, message) => {
+    acceptHandshake(socket, message);
+    if (message.type === 'inventory-changed') {
+      socket.send(JSON.stringify({ type: 'validate', id: 'v-1', tmuxServer: '/socket:1:100', targets: ['%3', '@4'] }));
+    }
+  }, async ui => {
+    const agent = makeAgent(ui.url, {
+      lingerMs: 20,
+      onValidate: async (server, targets) => {
+        assert.equal(server, '/socket:1:100');
+        assert.deepEqual(targets, ['%3', '@4']);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        return ['%3'];
+      },
+    });
+    try {
+      agent.reportInventoryChange();
+      assert.deepEqual(await ui.waitFor('validation'), {
+        type: 'validation', id: 'v-1', tmuxServer: '/socket:1:100', missing: ['%3'],
+      });
+    } finally { agent.stop(); }
+  });
+});
+
+test('an unavailable tmux inventory never reports missing targets', async () => {
+  await withFakeUi((socket, message) => {
+    acceptHandshake(socket, message);
+    if (message.type === 'inventory-changed') {
+      socket.send(JSON.stringify({ type: 'validate', id: 'v-1', tmuxServer: '/socket:1:100', targets: ['%3'] }));
+    }
+  }, async ui => {
+    let inspected = false;
+    const agent = makeAgent(ui.url, {
+      onValidate: async () => { inspected = true; return null; },
+    });
+    try {
+      agent.reportInventoryChange();
+      await ui.waitFor('inventory-changed');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(inspected, true);
+      assert.ok(!ui.received.some(message => message.type === 'validation'));
+    } finally { agent.stop(); }
+  });
+});
+
 test('hello names the client that started this server', async () => {
   await withFakeUi(acceptHandshake, async ui => {
     const agent = makeAgent(ui.url, { listGrants: () => [], mcpClient: () => 'opencode' });

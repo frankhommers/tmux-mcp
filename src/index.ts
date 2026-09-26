@@ -225,7 +225,9 @@ async function pruneStaleGrants(): Promise<void> {
       new Set(windowIds)
     );
     if (removed.length > 0) {
+      for (const id of removed) grantContext.delete(id);
       logToClient('info', `dropped grants for closed resources: ${removed.join(', ')}`);
+      agentSocket?.reportGrants();
     }
   } catch {
     // tmux unavailable: keep the grants; every tool still validates on use.
@@ -1865,6 +1867,7 @@ async function main() {
         token: dispatchToken,
         scope: getScopeMode(),
         clientVersion: 'tmux-mcp/0.2.3',
+        onValidate: tmux.validateTmuxTargets,
         // Known once the client has initialised, which is before any tool can
         // make this server dial dispatch.
         mcpClient: () => server.server.getClientVersion()?.name,
@@ -1985,7 +1988,7 @@ async function main() {
 
     const watcher = new ResourceChangeWatcher({
       onListChanged: () => {
-        if (humanAssigned) void pruneStaleGrants();
+        if (humanAssigned) void pruneStaleGrants().then(() => agentSocket?.reportInventoryChange());
         try { server.sendResourceListChanged(); } catch { /* ignore */ }
       },
       log: (level, msg) => {
@@ -1996,7 +1999,16 @@ async function main() {
     });
     void watcher.start();
 
+    // Also reconcile pins left behind by an exited agent, or changes missed
+    // while dispatch was unreachable. The connection still closes when idle.
+    agentSocket?.reportInventoryChange();
+    const inventoryTimer = agentSocket
+      ? setInterval(() => agentSocket?.reportInventoryChange(), 30_000)
+      : null;
+    inventoryTimer?.unref();
+
     const shutdown = () => {
+      if (inventoryTimer) clearInterval(inventoryTimer);
       try { watcher.stop(); } catch { /* ignore */ }
       try { agentSocket?.stop(); } catch { /* ignore */ }
     };

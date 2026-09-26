@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { executeTmux } from '../build/tmux.js';
+import { executeTmux, tmuxServerFingerprint, validateTmuxTargets } from '../build/tmux.js';
 
 function resultText(result) {
   assert.equal(result.content[0]?.type, 'text');
@@ -135,6 +135,74 @@ test('a pane dispatch names that does not exist is refused, and the request stay
     });
   } finally {
     await executeTmux(['kill-session', '-t', sessionName]);
+  }
+});
+
+test('live inventory distinguishes existing, missing and mismatched-server targets', async () => {
+  const sessionName = `tmux-inventory-${process.pid}-${randomUUID()}`;
+  const paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+  try {
+    const server = await tmuxServerFingerprint();
+    const windowId = await executeTmux(['display-message', '-p', '-t', paneId, '#{window_id}']);
+    assert.deepEqual(await validateTmuxTargets(server, [paneId, windowId, '%999999', '@999999']), ['%999999', '@999999']);
+    assert.equal(await validateTmuxTargets(`${server}-old`, [paneId]), null);
+    await executeTmux(['kill-session', '-t', sessionName]);
+    assert.deepEqual(await validateTmuxTargets(server, [paneId, windowId]), [paneId, windowId]);
+  } finally {
+    await executeTmux(['kill-session', '-t', sessionName]).catch(() => {});
+  }
+});
+
+test('closing an assigned session clears dispatch and a replacement needs a fresh grant', async () => {
+  const sessionName = `tmux-dispatchint-${process.pid}-${randomUUID()}`;
+  const anchorName = `${sessionName}-anchor`;
+  await executeTmux(['new-session', '-d', '-s', anchorName]);
+  let paneId;
+  try {
+    paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+    await withServerAndUi(async ({ client, waitFor, received }) => {
+      const first = await client.callTool({
+        name: 'request-pane',
+        arguments: { reason: 'session lifecycle test', timeoutSeconds: 20 },
+      });
+      assert.match(resultText(first), /^Status: granted$/m);
+      await waitFor('grants', 8000, message => message.grants.some(grant => grant.target === paneId));
+
+      const oldPane = paneId;
+      const afterGrant = received.length;
+      await executeTmux(['kill-session', '-t', sessionName]);
+      // No subsequent agent action should be needed to clear the overview.
+      await waitFor('grants', 8000, message =>
+        received.indexOf(message) >= afterGrant && message.grants.length === 0);
+
+      const gone = await client.callTool({ name: 'capture-pane', arguments: { paneId: oldPane, lines: '1' } });
+      assert.equal(gone.isError, true);
+
+      paneId = await executeTmux(['new-session', '-d', '-s', sessionName, '-P', '-F', '#{pane_id}']);
+      assert.notEqual(paneId, oldPane, 'reusing a session name does not restore its pane id');
+      const unassigned = await client.callTool({ name: 'capture-pane', arguments: { paneId, lines: '1' } });
+      assert.equal(unassigned.isError, true, 'a replacement must not inherit the old grant');
+
+      const replacement = await client.callTool({
+        name: 'request-pane',
+        arguments: { reason: 'assign the replacement session', timeoutSeconds: 20 },
+      });
+      assert.match(resultText(replacement), /^Status: granted$/m);
+      const usable = await client.callTool({ name: 'capture-pane', arguments: { paneId, lines: '1' } });
+      assert.ok(!usable.isError, resultText(usable));
+    }, {
+      behaviour: (socket, message) => {
+        if (message.type === 'request') {
+          socket.send(JSON.stringify({ type: 'answer', id: message.id, target: paneId }));
+        }
+        if (message.type === 'check') {
+          socket.send(JSON.stringify({ type: 'verdict', id: message.id, allowed: true }));
+        }
+      },
+    });
+  } finally {
+    await executeTmux(['kill-session', '-t', sessionName]).catch(() => {});
+    await executeTmux(['kill-session', '-t', anchorName]);
   }
 });
 

@@ -31,6 +31,8 @@ export interface AgentSocketOptions {
     => Promise<{ ok: true; target: string } | { ok: false; error: string }>;
   /** Called when dispatch asks for a fresh candidate list. */
   onRefresh: (id: string) => Promise<WireCandidate[]>;
+  /** Null means tmux could not be inspected; never report that as empty. */
+  onValidate?: (tmuxServer: string, targets: string[]) => Promise<string[] | null>;
   /** The grants held right now, reported by `reportGrants`. */
   /** The name the MCP client gave in its handshake, so a human can tell agents apart. */
   mcpClient?: () => string | undefined;
@@ -83,6 +85,8 @@ export class AgentSocket {
   private closing = false;
   /** A grant report is owed to dispatch as soon as the handshake lands. */
   private reporting = false;
+  private inventoryChanged = false;
+  private validating = 0;
   private lingerTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pendingChecks = new Map<string, (allowed: boolean) => void>();
 
@@ -112,7 +116,7 @@ export class AgentSocket {
   withdraw(id: string, why: 'expired' | 'answered_elsewhere' | 'shutdown'): void {
     if (!this.open.delete(id)) return;
     if (this.connected) this.send({ type: 'withdraw', id, why });
-    if (this.open.size === 0) this.disconnect();
+    if (this.open.size === 0 && this.validating === 0) this.disconnect();
   }
 
   /**
@@ -124,6 +128,20 @@ export class AgentSocket {
     this.reporting = true;
     if (this.connected) this.flushGrants();
     else this.ensureConnection();
+  }
+
+  /** Ask dispatch to revalidate its saved ids, including pins no agent holds. */
+  reportInventoryChange(): void {
+    if (this.refused || this.closing || !this.options.onValidate) return;
+    this.inventoryChanged = true;
+    if (this.connected) this.flushInventoryChange();
+    else this.ensureConnection();
+  }
+
+  private flushInventoryChange(): void {
+    this.inventoryChanged = false;
+    this.send({ type: 'inventory-changed' });
+    this.lingerThenHangUp();
   }
 
   /**
@@ -250,7 +268,7 @@ export class AgentSocket {
       const wasHandshaken = this.handshaken;
       this.socket = null;
       this.handshaken = false;
-      if (this.closing || this.refused || this.open.size === 0) return;
+      if (this.closing || this.refused || (this.open.size === 0 && !this.reporting && !this.inventoryChanged)) return;
       if (wasHandshaken) this.options.log('info', 'dispatch service connection lost, reconnecting');
       this.scheduleRetry();
     });
@@ -272,6 +290,7 @@ export class AgentSocket {
         // restarted with an empty head since we last spoke.
         for (const request of this.open.values()) this.send({ type: 'request', ...request });
         this.flushGrants();
+        if (this.options.onValidate) this.flushInventoryChange();
         return;
       }
 
@@ -282,6 +301,24 @@ export class AgentSocket {
               'Falling back to `tmux-mcp grant`.'
             : 'dispatch service refused this device. Pair it again, or use `tmux-mcp grant`.'
         );
+        return;
+      }
+
+      case 'validate': {
+        if (!this.options.onValidate) return;
+        const socket = this.socket;
+        this.validating++;
+        try {
+          const missing = await this.options.onValidate(message.tmuxServer, message.targets);
+          if (missing !== null && this.connected && this.socket === socket) {
+            this.send({ type: 'validation', id: message.id, tmuxServer: message.tmuxServer, missing });
+          }
+        } catch (error) {
+          this.options.log('warning', `could not validate tmux inventory: ${(error as Error).message}`);
+        } finally {
+          this.validating--;
+          if (this.connected) this.lingerThenHangUp();
+        }
         return;
       }
 
@@ -336,7 +373,7 @@ export class AgentSocket {
     if (this.lingerTimer) clearTimeout(this.lingerTimer);
     this.lingerTimer = setTimeout(() => {
       this.lingerTimer = null;
-      if (this.open.size === 0 && !this.reporting) this.disconnect();
+      if (this.open.size === 0 && !this.reporting && !this.inventoryChanged && this.validating === 0) this.disconnect();
     }, this.options.lingerMs ?? LINGER_MS);
     this.lingerTimer.unref?.();
   }
@@ -353,7 +390,7 @@ export class AgentSocket {
     this.backoff = Math.min(this.backoff * 2, BACKOFF_MAX_MS);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      if (this.open.size > 0) this.ensureConnection();
+      if (this.open.size > 0 || this.reporting || this.inventoryChanged) this.ensureConnection();
     }, delay);
     this.retryTimer.unref?.();
   }

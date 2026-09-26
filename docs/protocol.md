@@ -10,7 +10,7 @@ own types and agree at runtime through `PROTOCOL_VERSION`.
 
 ## Version
 
-`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.5`**.
+`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.6`**.
 
 - Equal majors connect. A higher minor on either side is fine: unknown
   message types and unknown fields are ignored.
@@ -41,7 +41,7 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 ```json
 {
   "type": "hello",
-  "protocolVersion": "1.5",
+  "protocolVersion": "1.6",
   "agent": {
     "instanceId": "0f0d8f6c-6a1f-4a3e-9a02-2b0e2f9a1d77",
     "tmuxServer": "/private/tmp/tmux-501/default:16186:1788462695",
@@ -166,7 +166,7 @@ own grant, so a slow or absent dispatch cannot block work.
 ### `welcome`
 
 ```json
-{ "type": "welcome", "protocolVersion": "1.5", "account": "frankhommers" }
+{ "type": "welcome", "protocolVersion": "1.6", "account": "frankhommers" }
 ```
 
 ### `refuse`
@@ -211,6 +211,36 @@ and drop the grant.
 
 Dispatch remembers a revocation until the server confirms it is gone, so a
 revoke lands even when nothing was connected at the time.
+
+## Inventory cleanup (1.6)
+
+The MCP server sends `{ "type": "inventory-changed" }` after structural tmux
+changes, on connection, and every 30 seconds as a retry for missed changes.
+Dispatch responds only when it has concrete ids to check on that host and
+exact tmux server instance:
+
+```json
+{ "type": "validate", "id": "v-123", "tmuxServer": "/tmp/tmux/default:100:200", "targets": ["%3", "@4"] }
+```
+
+The MCP server reads the complete live pane and window inventory, independently
+of the agent's grants and static scope. It checks the tmux server fingerprint
+both before and after the lookup. A failed lookup or a changed fingerprint is
+unknown, not an empty inventory, and produces no validation result.
+
+```json
+{ "type": "validation", "id": "v-123", "tmuxServer": "/tmp/tmux/default:100:200", "missing": ["%3"] }
+```
+
+Dispatch accepts a reply only from the current connection that was asked,
+within 10 seconds, for the same server fingerprint and only for requested ids.
+Confirmed missing ids remove their pin rules, saved grants and revocations
+within the same account, host and server. Pattern rules, unbound rules and
+other machines are preserved. Silence, disconnects and old clients never
+justify deletion. No active MCP server means cleanup waits for one to connect;
+an unreachable tmux server is handled by the existing restart cleanup when a
+new server instance is observed. Both sides must support 1.6 for inventory
+validation; older 1.x peers continue working and ignore the new messages.
 
 ## What dispatch cannot do
 

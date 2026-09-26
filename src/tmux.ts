@@ -76,6 +76,20 @@ export async function tmuxServerFingerprint(): Promise<string> {
   return executeTmux(['display-message', '-p', '#{socket_path}:#{pid}:#{start_time}']);
 }
 
+/** Only a successful inventory of the requested server proves an id is gone. */
+export async function validateTmuxTargets(server: string, targets: string[]): Promise<string[] | null> {
+  try {
+    if (await tmuxServerFingerprint() !== server) return null;
+    const [panes, windows] = await Promise.all([listAllPanes(), listAllWindowIds()]);
+    // Restarting during the read invalidates even an otherwise valid snapshot.
+    if (await tmuxServerFingerprint() !== server) return null;
+    const live = new Set([...panes.map(pane => pane.paneId), ...windows]);
+    return targets.filter(target => !live.has(target));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Check if tmux server is running
  */
