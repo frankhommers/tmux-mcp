@@ -94,7 +94,7 @@ function progressTokenNote(): string {
 // Create MCP server
 const server = new McpServer({
   name: "tmux-mcp",
-  version: "0.2.3"
+  version: "0.3.0"
 }, {
   capabilities: {
     resources: {
@@ -1866,7 +1866,7 @@ async function main() {
         url: dispatchUrl,
         token: dispatchToken,
         scope: getScopeMode(),
-        clientVersion: 'tmux-mcp/0.2.3',
+        clientVersion: 'tmux-mcp/0.3.0',
         onValidate: tmux.validateTmuxTargets,
         // Known once the client has initialised, which is before any tool can
         // make this server dial dispatch.

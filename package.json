@@ -1,6 +1,6 @@
 {
   "name": "tmux-mcp",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "MCP Server for interfacing with tmux sessions",
   "type": "module",
   "main": "build/index.js",
@@ -17,7 +17,10 @@
     "tmux-mcp": "build/index.js"
   },
   "files": [
-    "build"
+    "build",
+    "CHANGELOG.md",
+    "docs/protocol.md",
+    "examples/assign-hooks"
   ],
   "keywords": [
     "mcp",
@@ -40,10 +43,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nickgnd/tmux-mcp.git"
+    "url": "git+https://github.com/frankhommers/tmux-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/nickgnd/tmux-mcp/issues"
+    "url": "https://github.com/frankhommers/tmux-mcp/issues"
   },
-  "homepage": "https://github.com/nickgnd/tmux-mcp#readme"
+  "homepage": "https://github.com/frankhommers/tmux-mcp#readme",
+  "contributors": [
+    "Frank Hommers"
+  ]
 }

@@ -2,6 +2,19 @@
 
 Model Context Protocol server that enables AI assistants to interact with and view tmux session content. This integration allows AI assistants to read from, control, and observe your terminal sessions.
 
+**Human-assigned access and the web dispatcher are optional.** By default,
+tmux-mcp works on its own, without pairing, a dispatcher, or human approval
+for each pane. Enable `--human-assigned` only when you want to choose which
+panes an agent may use. Even in that mode, you can assign panes through the
+CLI or a hook without running a web service.
+
+The optional [tmux-dispatch](https://github.com/frankhommers/tmux-dispatch)
+companion adds a browser inbox for assignments, revocation, and saved rules.
+
+This is Frank Hommers' fork of
+[nickgnd/tmux-mcp](https://github.com/nickgnd/tmux-mcp), originally created by
+Nicolò Gnudi. Both projects are MIT licensed; see [LICENSE.md](LICENSE.md).
+
 ## Features
 
 - List and search tmux sessions
@@ -21,7 +34,7 @@ Check out this short video to get excited!
 
 ## Prerequisites
 
-- Node.js
+- Node.js (24 recommended)
 - tmux installed and running
 
 ## Usage
@@ -35,6 +48,10 @@ npx --prefer-online -y github:frankhommers/tmux-mcp
 ```
 
 The `--prefer-online` flag tells npx to check for updates instead of using a stale cached version. The `-y` flag skips the install confirmation prompt.
+
+This installs this fork directly from GitHub. For a fixed release, use
+`github:frankhommers/tmux-mcp#v0.3.0` in place of the package reference.
+See the [release notes](https://github.com/frankhommers/tmux-mcp/releases).
 
 To register it with an MCP client, the exact command depends on the client. For example, with Claude Code:
 
@@ -75,6 +92,8 @@ npx --prefer-online -y github:frankhommers/tmux-mcp --scope=session --default-sp
 | `--include-current-pane` | — | excluded | Allow the agent to interact with its own pane |
 | `--default-split-direction=horizontal\|vertical` | `TMUX_MCP_DEFAULT_SPLIT_DIRECTION` | `horizontal` | Default direction for `split-pane` and `new-pane` |
 | `--human-assigned` | `TMUX_MCP_HUMAN_ASSIGNED` | off | Start with no access; a human assigns every pane (see below) |
+| `--dispatch-url=<url>` | `TMUX_MCP_DISPATCH_URL` | — | Optional dispatcher WebSocket URL; used only with human-assigned access |
+| `--dispatch-token=<token>` | `TMUX_MCP_DISPATCH_TOKEN` | paired credential | Optional shared deployment token; normally use `dispatch-login` |
 | `--assign-hook=<path>` | `TMUX_MCP_ASSIGN_HOOK` | — | Script that asks the human (see below) |
 | `--requests-dir=<path>` | `TMUX_MCP_REQUESTS_DIR` | `~/.tmux-mcp/requests` | Where pending pane requests are stored |
 | `--shell-type=bash\|zsh\|fish` (`-s`) | — | — | Shell type for the target pane |
@@ -91,7 +110,25 @@ By default the MCP server has unrestricted access to all tmux sessions, windows 
 
 Tools that fall outside the active scope are **removed from the tool list** — the LLM never sees them. Remaining tools that accept an ID (like `capture-pane` or `execute-command-async`) still validate that the target is within the allowed scope at runtime.
 
-#### Human-assigned access
+#### Optional human-assigned access
+
+This mode is **off by default**. Enable it with `--human-assigned` or
+`TMUX_MCP_HUMAN_ASSIGNED=1` (also accepts `true`). A dispatcher URL alone
+does not enable it.
+
+Choose the setup that fits your workflow:
+
+| Setup | Server arguments | How panes become available |
+|-------|------------------|----------------------------|
+| Default, standalone | no extra arguments | Normal tmux access, subject to `--scope` and own-pane exclusion |
+| Human-assigned, standalone | `--human-assigned` | A human uses the CLI or an assign hook |
+| Human-assigned with web inbox | `--human-assigned --dispatch-url wss://tmux.example.com/agent` | A human uses tmux-dispatch, or a saved rule matches |
+
+For example, start human-assigned mode **without a dispatcher**:
+
+```sh
+npx --prefer-online -y github:frankhommers/tmux-mcp --human-assigned
+```
 
 `--human-assigned` starts the agent with access to **nothing**: no session,
 window or pane is visible or usable. The agent asks for one with the
@@ -112,7 +149,7 @@ and is not the server's own pane.
 A request is answered outside the agent's client — the agent is in none of
 these paths, so it cannot answer its own request:
 
-1. **The dispatch service** — a separate service, in its own repository:
+1. **The optional dispatch service** — a separate service, in its own repository:
    [tmux-dispatch](https://github.com/frankhommers/tmux-dispatch). Point this
    server at it with `--dispatch-url` and it dials out over a WebSocket, carrying
    the pane candidates with it. Dispatch never runs tmux and mounts nothing,
@@ -123,10 +160,10 @@ these paths, so it cannot answer its own request:
    Pair the machine once, then point the server at dispatch:
 
    ```bash
-   tmux-mcp dispatch-login --url https://tmux.example.com
+   npx --prefer-online -y github:frankhommers/tmux-mcp dispatch-login --url https://tmux.example.com
    # Open https://tmux.example.com/link and enter: WQ7F-2K9P
 
-   tmux-mcp --human-assigned --dispatch-url wss://tmux.example.com/agent
+   npx --prefer-online -y github:frankhommers/tmux-mcp --human-assigned --dispatch-url wss://tmux.example.com/agent
    ```
 
    `dispatch-login` stores a device token in `~/.tmux-mcp/credentials.json` (mode
@@ -138,6 +175,8 @@ these paths, so it cannot answer its own request:
    and validate saved pane/window ids. Inventory changes trigger validation;
    a check every 30 seconds catches missed changes. With protocol 1.6 on both
    sides, confirmed missing ids lose their saved assignments and pin rules.
+   Recreating a session with the same name does not restore its old panes or
+   their grants; a new pane needs a new assignment.
    An unavailable tmux server is not treated as empty. If dispatch is
    unreachable, refuses the connection, or speaks a different protocol major,
    the request still lands in the requests directory and the channels below
@@ -146,9 +185,9 @@ these paths, so it cannot answer its own request:
 2. **The CLI** — from any shell, including over SSH:
 
    ```bash
-   tmux-mcp requests                  # what is pending, listing panes live
-   tmux-mcp grant r-8f3k2 %3          # assign pane %3
-   tmux-mcp deny r-8f3k2 "not now"
+   npx --prefer-online -y github:frankhommers/tmux-mcp requests
+   npx --prefer-online -y github:frankhommers/tmux-mcp grant r-8f3k2 %3
+   npx --prefer-online -y github:frankhommers/tmux-mcp deny r-8f3k2 "not now"
    ```
 
 3. **An assign hook** — your own script; mainly to notify you, though it may
