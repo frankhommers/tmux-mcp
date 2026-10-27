@@ -6,6 +6,7 @@ import {
   checkCommandStatus,
   executeCommand,
   executeTmux,
+  runBlocking,
   sendInterrupt,
 } from '../build/tmux.js';
 
@@ -133,5 +134,38 @@ test('completes with output when tty ONLCR is disabled', async () => {
     assert.equal(status.status, 'completed');
     assert.equal(status.exitCode, 0);
     assert.equal(status.result, 'foo');
+  });
+});
+
+test('detects the exit code after the start marker leaves captured scrollback', async () => {
+  await withFreshPane(async (paneId) => {
+    const commandId = await executeCommand(
+      paneId,
+      "awk 'BEGIN { for (i = 1; i <= 4000; i++) print \"output line \" i }'; exit 7",
+    );
+    const status = await waitForStatus(commandId, current => current.status !== 'pending');
+
+    assert.equal(status.status, 'error');
+    assert.equal(status.exitCode, 7);
+    assert.match(status.result, /output line 4000\n$/);
+    assert.doesNotMatch(status.result, /TMUX_MCP_(START|DONE)/);
+  });
+});
+
+test('wait-for-exit resolves after a command clears its start marker', async () => {
+  await withFreshPane(async (paneId) => {
+    let timer;
+    const result = await Promise.race([
+      runBlocking(paneId, String.raw`printf '\033[2J\033[H\033[3J\nfinished\n'`, {
+        pollIntervalMs: 20,
+      }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('wait-for-exit stayed pending')), 2000);
+      }),
+    ]).finally(() => clearTimeout(timer));
+
+    assert.equal(result.status, 'completed');
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.output, '\nfinished\n');
   });
 });

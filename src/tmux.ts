@@ -518,9 +518,11 @@ export async function executeCommand(
 function parseCommandOutput(command: CommandExecution, content: string): CommandOutputSnapshot | null {
   const startMarker = getStartMarkerText(command);
   const startIndex = content.lastIndexOf(startMarker);
-  if (startIndex === -1) return null;
 
-  const outputStart = startIndex + startMarker.length;
+  // The start marker can scroll out of the capture window (or be erased by
+  // terminal controls). The command-specific end marker still proves exit;
+  // requiring both would leave blocking callers waiting indefinitely.
+  const outputStart = startIndex === -1 ? 0 : startIndex + startMarker.length;
   const endMarkerPrefix = getEndMarkerPrefix(command);
   const endMarkerRegex = new RegExp(`^${endMarkerPrefix}(\\d+)\\r?$`, 'gm');
   const contentAfterStart = content.substring(outputStart);
@@ -531,15 +533,20 @@ function parseCommandOutput(command: CommandExecution, content: string): Command
     matchingEndMarker = endMarkerMatch;
   }
 
+  // Without either boundary we cannot attribute this content to the command.
+  if (startIndex === -1 && !matchingEndMarker) return null;
+
   const outputEnd = matchingEndMarker
     ? outputStart + matchingEndMarker.index
     : content.length;
   let output = content.substring(outputStart, outputEnd);
 
-  if (output.startsWith('\r\n')) {
-    output = output.substring(2);
-  } else if (output.startsWith('\n')) {
-    output = output.substring(1);
+  if (startIndex !== -1) {
+    if (output.startsWith('\r\n')) {
+      output = output.substring(2);
+    } else if (output.startsWith('\n')) {
+      output = output.substring(1);
+    }
   }
 
   if (matchingEndMarker) {

@@ -328,6 +328,11 @@ This makes it easy to see at a glance what command is running in each pane, the 
 - Use `execute-command-wait-for-content` when output or readiness is the condition.
 - Use `wait-for-pane-content` for external or untracked pane activity.
 
+Tracked commands recognize completion from their end marker even if the start
+marker has scrolled out of captured history or was cleared from the screen.
+In that case, the returned output contains only the portion still captured;
+erased or discarded output cannot be recovered.
+
 `execute-command-wait-for-content` atomically starts a tracked command and
 matches only that command's output. Plain-text substring and regex matching are
 both line-by-line, so patterns cannot span lines. Tracked capture joins tmux
