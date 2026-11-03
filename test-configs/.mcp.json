@@ -14,7 +14,8 @@
         "/Users/frankhommers/Repos/tmux-mcp/build/index.js",
         "--human-assigned",
         "--dispatch-url=ws://127.0.0.1:7676/agent",
-        "--requests-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/requests"
+        "--requests-dir=/Users/frankhommers/Repos/tmux-mcp/test-configs/requests",
+        "--session-id-env=T3CODE_THREAD_ID"
       ]
     }
   }
