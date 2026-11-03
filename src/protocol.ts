@@ -8,7 +8,7 @@
  */
 
 /** "<major>.<minor>". Same major connects; different major refuses. */
-export const PROTOCOL_VERSION = '1.6';
+export const PROTOCOL_VERSION = '1.7';
 
 export function protocolMajor(version: string): string {
   return version.split('.')[0] ?? '';
@@ -29,6 +29,12 @@ export interface AgentIdentity {
   tmuxServer?: string;
   /** The name the MCP client gave in its `initialize` handshake, verbatim. */
   mcpClient?: string;
+  /**
+   * The agent session this server serves, when the user configured one. Opaque
+   * to both sides. Unlike instanceId it can outlive this process, so dispatch
+   * may bind rules to it. Absent means: tell sessions apart by instanceId.
+   */
+  sessionId?: string;
   pid: number;
   host: string;
   cwd: string;

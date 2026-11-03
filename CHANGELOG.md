@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Several agents in one directory
+
+- `--session-id=<value>` / `TMUX_MCP_SESSION_ID` and
+  `--session-id-env=<VAR,...>` / `TMUX_MCP_SESSION_ID_ENV` name the agent
+  session this server serves; you choose the value or the environment variable
+  it comes from.
+- Naming `T3CODE_THREAD_ID` in `--session-id-env` opts into a T3 Code
+  fallback: an ACP agent lacks that variable until pingdotgg/t3code#30361
+  ships, so when it is absent the server asks T3's own per-thread MCP endpoint
+  which thread it serves. The token never leaves the machine, and nothing is
+  resolved without this configuration.
+- Protocol 1.7 sends it to dispatch as the optional `sessionId` in `hello`, so
+  agents started from the same directory no longer look the same, and a kept
+  pane can be bound to a session rather than a directory. 1.6 peers ignore it.
+
 ## 0.3.0 — 2026-09-26
 
 This fork is published through GitHub. Install a fixed release with:

@@ -10,7 +10,7 @@ own types and agree at runtime through `PROTOCOL_VERSION`.
 
 ## Version
 
-`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.6`**.
+`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.7`**.
 
 - Equal majors connect. A higher minor on either side is fine: unknown
   message types and unknown fields are ignored.
@@ -41,11 +41,12 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 ```json
 {
   "type": "hello",
-  "protocolVersion": "1.6",
+  "protocolVersion": "1.7",
   "agent": {
     "instanceId": "0f0d8f6c-6a1f-4a3e-9a02-2b0e2f9a1d77",
     "tmuxServer": "/private/tmp/tmux-501/default:16186:1788462695",
     "mcpClient": "opencode",
+    "sessionId": "4a39f122-e5a7-427d-b110-17b28817a9f2",
     "pid": 4711,
     "host": "frank-mbp",
     "cwd": "/Users/frank/Repos/app",
@@ -69,6 +70,22 @@ meant.
 `mcpClient` is the name the MCP client gave in its `initialize` handshake,
 passed on verbatim. A pid tells a human nothing; the client that runs the
 agent, and the pane it runs in (`tmuxSession`), do.
+
+`sessionId` (1.7, optional) names the agent session this server serves, as the
+user configured it with `--session-id` or `--session-id-env`. It is opaque to
+both sides and tmux-mcp knows no harness: the user decides which value it is.
+Several agents can run from one directory, and without it they look the same.
+Unlike `instanceId` it may outlive the process, since an agent that restarts
+its MCP servers keeps its session, so dispatch may bind rules to it. Absent
+means the session is unknown: dispatch tells agents apart by `instanceId` and
+binds rules to `cwd`, as before.
+
+Whatever binds a rule, dispatch never lets one hand out a target that another
+live agent on the same tmux server already holds; it asks the human instead.
+An idle agent hangs up but still holds its panes, so an agent counts as live
+while connected or heard from in the last 90 seconds (a running MCP server
+dials in at least every 30). Servers with the same `sessionId` are one agent,
+restarted, and do not block each other.
 
 ### `request`
 
@@ -166,7 +183,7 @@ own grant, so a slow or absent dispatch cannot block work.
 ### `welcome`
 
 ```json
-{ "type": "welcome", "protocolVersion": "1.6", "account": "frankhommers" }
+{ "type": "welcome", "protocolVersion": "1.7", "account": "frankhommers" }
 ```
 
 ### `refuse`

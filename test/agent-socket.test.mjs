@@ -616,3 +616,48 @@ test('hello names the client that started this server', async () => {
     }
   });
 });
+
+test('hello carries the configured session id', async () => {
+  await withFakeUi(acceptHandshake, async ui => {
+    const agent = makeAgent(ui.url, { listGrants: () => [], sessionId: 'thread-42' });
+    try {
+      agent.offer(REQUEST);
+      const hello = await ui.waitFor('hello');
+      assert.equal(hello.agent.sessionId, 'thread-42',
+        'two agents in one directory are only told apart by their session');
+    } finally {
+      agent.stop();
+    }
+  });
+});
+
+test('hello leaves the session id out when none is configured', async () => {
+  await withFakeUi(acceptHandshake, async ui => {
+    const agent = makeAgent(ui.url, { listGrants: () => [] });
+    try {
+      agent.offer(REQUEST);
+      const hello = await ui.waitFor('hello');
+      assert.equal('sessionId' in hello.agent, false);
+    } finally {
+      agent.stop();
+    }
+  });
+});
+
+test('a session id resolved lazily still reaches the hello', async () => {
+  await withFakeUi(acceptHandshake, async ui => {
+    let asked = 0;
+    const agent = makeAgent(ui.url, {
+      listGrants: () => [],
+      sessionId: async () => { asked += 1; return 'resolved-later'; },
+    });
+    try {
+      agent.offer(REQUEST);
+      const hello = await ui.waitFor('hello');
+      assert.equal(hello.agent.sessionId, 'resolved-later');
+      assert.ok(asked >= 1, 'the resolver, not a stale value, names the session');
+    } finally {
+      agent.stop();
+    }
+  });
+});

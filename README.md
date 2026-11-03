@@ -94,6 +94,8 @@ npx --prefer-online -y github:frankhommers/tmux-mcp --scope=session --default-sp
 | `--human-assigned` | `TMUX_MCP_HUMAN_ASSIGNED` | off | Start with no access; a human assigns every pane (see below) |
 | `--dispatch-url=<url>` | `TMUX_MCP_DISPATCH_URL` | — | Optional dispatcher WebSocket URL; used only with human-assigned access |
 | `--dispatch-token=<token>` | `TMUX_MCP_DISPATCH_TOKEN` | paired credential | Optional shared deployment token; normally use `dispatch-login` |
+| `--session-id=<value>` | `TMUX_MCP_SESSION_ID` | — | Name the agent session for dispatch (see below) |
+| `--session-id-env=<VAR,...>` | `TMUX_MCP_SESSION_ID_ENV` | — | Read the session id from the first of these variables that is set |
 | `--assign-hook=<path>` | `TMUX_MCP_ASSIGN_HOOK` | — | Script that asks the human (see below) |
 | `--requests-dir=<path>` | `TMUX_MCP_REQUESTS_DIR` | `~/.tmux-mcp/requests` | Where pending pane requests are stored |
 | `--shell-type=bash\|zsh\|fish` (`-s`) | — | — | Shell type for the target pane |
@@ -181,6 +183,36 @@ these paths, so it cannot answer its own request:
    unreachable, refuses the connection, or speaks a different protocol major,
    the request still lands in the requests directory and the channels below
    answer it. See `docs/protocol.md` for the wire contract.
+
+   **Several agents in one directory.** To dispatch, two agents started from
+   the same directory look the same: same machine, same `cwd`, same client.
+   A session id keeps them apart, and binds a kept pane to the session instead
+   of the directory, so it survives the agent restarting its MCP servers.
+
+   Say where the id comes from:
+
+   ```bash
+   # Read it from a variable your agent host sets per session or thread
+   ... --session-id-env=T3CODE_THREAD_ID
+   # Several candidates: the first one that is set wins
+   ... --session-id-env=T3CODE_THREAD_ID,CLAUDE_CODE_SESSION_ID
+   # Or pass the value itself, e.g. from a wrapper script
+   ... --session-id="$MY_THREAD_ID"
+   ```
+
+   `T3CODE_THREAD_ID` is what [T3 Code](https://t3.codes) sets for the Claude
+   and Codex sessions it runs. Naming it also opts into a fallback for T3's
+   ACP agents, which do not have the variable yet
+   ([pingdotgg/t3code#30361](https://github.com/pingdotgg/t3code/pull/30361)):
+   their environment carries a per-thread `T3_ACP_MCP_ENDPOINT` and token, and
+   when the variable is absent the server asks that endpoint which thread it
+   serves. The token stays on your machine; only the thread id goes to
+   dispatch. Nothing is resolved without this configuration.
+
+   Pick a variable that stays the same for the whole session, also when the
+   agent restarts its MCP servers: a kept pane is bound to that value. Without
+   a session id, dispatch tells agents apart per server process and binds kept
+   panes to the directory, as before.
 
 2. **The CLI** — from any shell, including over SSH:
 

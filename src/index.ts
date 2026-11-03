@@ -15,6 +15,7 @@ import type { Answer, PaneRequest } from './requests.js';
 import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
 import { spawnAssignHook } from './assign-hook.js';
 import { AgentSocket } from './agent-socket.js';
+import { sessionIdSource } from './t3-session.js';
 import { isPairCliCommand, runPairCli } from './cli-pair.js';
 import { tokenFor } from './credentials.js';
 
@@ -1836,7 +1837,9 @@ async function main() {
         'assign-hook': { type: 'string' },
         'requests-dir': { type: 'string' },
         'dispatch-url': { type: 'string' },
-        'dispatch-token': { type: 'string' }
+        'dispatch-token': { type: 'string' },
+        'session-id': { type: 'string' },
+        'session-id-env': { type: 'string' }
       }
     });
 
@@ -1871,6 +1874,12 @@ async function main() {
         // Known once the client has initialised, which is before any tool can
         // make this server dial dispatch.
         mcpClient: () => server.server.getClientVersion()?.name,
+        sessionId: sessionIdSource({
+          value: values['session-id'] as string | undefined,
+          envNames: values['session-id-env'] as string | undefined,
+          env: process.env,
+          log: logToClient,
+        }),
         onAnswer: answerFromDispatch,
         onRefresh: async id => {
           const request = getRequest(id);

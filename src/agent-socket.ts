@@ -36,6 +36,8 @@ export interface AgentSocketOptions {
   /** The grants held right now, reported by `reportGrants`. */
   /** The name the MCP client gave in its handshake, so a human can tell agents apart. */
   mcpClient?: () => string | undefined;
+  /** The agent session this server serves, so two agents in one directory stay apart. */
+  sessionId?: string | (() => Promise<string | undefined>);
   listGrants?: () => WireGrant[];
   /** Take a grant back. Returns whether anything was actually held. */
   onRevoke?: (target: string) => boolean | Promise<boolean>;
@@ -209,6 +211,10 @@ export class AgentSocket {
       instanceId: this.instanceId,
       tmuxServer: await tmuxServerFingerprint().catch(() => undefined),
       mcpClient: this.options.mcpClient?.(),
+      sessionId:
+        typeof this.options.sessionId === 'function'
+          ? await this.options.sessionId().catch(() => undefined)
+          : this.options.sessionId,
       pid: process.pid,
       host: hostname(),
       cwd: process.cwd(),
