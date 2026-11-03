@@ -50,7 +50,7 @@ npx --prefer-online -y github:frankhommers/tmux-mcp
 The `--prefer-online` flag tells npx to check for updates instead of using a stale cached version. The `-y` flag skips the install confirmation prompt.
 
 This installs this fork directly from GitHub. For a fixed release, use
-`github:frankhommers/tmux-mcp#v0.3.0` in place of the package reference.
+`github:frankhommers/tmux-mcp#v0.4.0` in place of the package reference.
 See the [release notes](https://github.com/frankhommers/tmux-mcp/releases).
 
 To register it with an MCP client, the exact command depends on the client. For example, with Claude Code:

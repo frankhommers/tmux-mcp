@@ -1869,7 +1869,7 @@ async function main() {
         url: dispatchUrl,
         token: dispatchToken,
         scope: getScopeMode(),
-        clientVersion: 'tmux-mcp/0.3.0',
+        clientVersion: 'tmux-mcp/0.4.0',
         onValidate: tmux.validateTmuxTargets,
         // Known once the client has initialised, which is before any tool can
         // make this server dial dispatch.
