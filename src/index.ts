@@ -9,12 +9,13 @@ import { initScope, assertInScope, setActionConfirmer, isScopeActive, isInScope,
 import { createProgressEmitter } from './progress.js';
 import { ResourceChangeWatcher } from './control-mode.js';
 import { isGrantCliCommand, runGrantCli } from './cli-grant.js';
-import { addGrant, listGrants, revokeGrant, pruneGrants } from './grants.js';
+import { addGrant, listGrants, revokeGrant, pruneGrants, grantsServer, forgetGrantsOn } from './grants.js';
 import { buildCandidates, createRequest, getRequest, answerRequest, waitForAnswer, onRequestSettled, onRequestExpired, expireRequests, getLastRefusal } from './requests.js';
 import type { Answer, PaneRequest } from './requests.js';
 import { resolveRequestsDir, writeRequestFile, removeRequestFiles, startAnswerWatcher } from './requests-dir.js';
 import { spawnAssignHook } from './assign-hook.js';
 import { AgentSocket } from './agent-socket.js';
+import { TmuxServerWatch } from './tmux-watch.js';
 import { sessionIdSource } from './t3-session.js';
 import { isPairCliCommand, runPairCli } from './cli-pair.js';
 import { tokenFor } from './credentials.js';
@@ -213,6 +214,31 @@ async function autoGrantNewPane(paneId: string): Promise<void> {
     addGrant({ kind: 'pane', id: paneId, windowId, sessionId }, await tmux.tmuxServerFingerprint());
   } catch {
     logToClient('warning', `could not auto-grant new pane ${paneId}`);
+  }
+}
+
+const tmuxWatch = new TmuxServerWatch({ fingerprint: () => tmux.tmuxServerFingerprint() });
+
+/**
+ * A tmux server that is gone takes every assignment made on it along: its ids
+ * point at nothing, or at panes nobody handed over. Dropped here at once rather
+ * than at the next action, and dispatch is told so it can clear what agents
+ * that are no longer around held there too.
+ */
+async function forgetDeadTmuxServer(): Promise<void> {
+  const held = grantsServer();
+  if (held && tmuxWatch.current === null) tmuxWatch.saw(held);
+  const gone = await tmuxWatch.poll();
+  if (!gone) return;
+  const dropped = forgetGrantsOn(gone);
+  for (const id of dropped) grantContext.delete(id);
+  logToClient('info', dropped.length > 0
+    ? `tmux server ${gone} is gone; dropped ${dropped.join(', ')}`
+    : `tmux server ${gone} is gone`);
+  agentSocket?.reportTmuxGone(gone);
+  if (dropped.length > 0) {
+    agentSocket?.reportGrants();
+    try { server.sendResourceListChanged(); } catch { /* ignore */ }
   }
 }
 
@@ -927,7 +953,7 @@ if (humanAssigned) {
       reason: z.string().min(1).max(200).describe("Why you need the pane. Shown to the human verbatim, so be specific: 'run the test suite', 'tail the dev server log'."),
       kind: z.enum(["pane", "window"]).optional().describe("Ask for a single pane (default) or a whole window (every pane inside it becomes usable)."),
       timeoutSeconds: z.number().min(1).optional().describe(`How long to wait for the human before returning Status: pending. Default ${DEFAULT_REQUEST_TIMEOUT_SECONDS}s.`),
-      suggest: z.string().regex(/^[%@]?\d+$/).optional().describe("A pane id like '%56' you already know you want, e.g. because the human named it. Shown to them as a suggestion; they still choose, and this grants nothing by itself."),
+      suggest: z.string().regex(/^[%@]?\d+$/).optional().describe("A pane id like '%56' you already know you want, e.g. because the human named it. Shown to them as a suggestion; they still choose, and this grants nothing by itself. Pass it whenever the human named a pane: a standing rule then only hands over that one, never another that happens to match."),
       requestId: z.string().optional().describe("Poll an earlier request that returned Status: pending. When set, `reason` is ignored and no new request is created."),
     },
     async ({ reason, kind, timeoutSeconds, requestId, suggest }) => {
@@ -1997,7 +2023,11 @@ async function main() {
 
     const watcher = new ResourceChangeWatcher({
       onListChanged: () => {
-        if (humanAssigned) void pruneStaleGrants().then(() => agentSocket?.reportInventoryChange());
+        if (humanAssigned) {
+          void forgetDeadTmuxServer()
+            .then(() => pruneStaleGrants())
+            .then(() => agentSocket?.reportInventoryChange());
+        }
         try { server.sendResourceListChanged(); } catch { /* ignore */ }
       },
       log: (level, msg) => {
@@ -2011,8 +2041,11 @@ async function main() {
     // Also reconcile pins left behind by an exited agent, or changes missed
     // while dispatch was unreachable. The connection still closes when idle.
     agentSocket?.reportInventoryChange();
-    const inventoryTimer = agentSocket
-      ? setInterval(() => agentSocket?.reportInventoryChange(), 30_000)
+    if (humanAssigned) void forgetDeadTmuxServer();
+    const inventoryTimer = humanAssigned
+      ? setInterval(() => {
+        void forgetDeadTmuxServer().finally(() => agentSocket?.reportInventoryChange());
+      }, 30_000)
       : null;
     inventoryTimer?.unref();
 

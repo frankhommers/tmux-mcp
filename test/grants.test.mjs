@@ -14,6 +14,8 @@ import {
   pruneGrants,
   resetGrants,
   bindGrantsToServer,
+  forgetGrantsOn,
+  grantsServer,
 } from '../build/grants.js';
 
 test('starts empty: nothing is granted', () => {
@@ -155,4 +157,14 @@ test('a grant says which tmux server it was made on', () => {
   assert.equal(isPaneGranted('%3', '@1'), true);
   assert.deepEqual(bindGrantsToServer('server-B'), ['%3']);
   assert.equal(hasAnyGrant(), false);
+});
+
+test('a tmux server that is gone takes its grants along', () => {
+  resetGrants();
+  addGrant({ kind: 'pane', id: '%3', windowId: '@1', sessionId: '$0' }, 'sock:1:100');
+  assert.deepEqual(forgetGrantsOn('sock:2:200'), [], 'another server is not ours to clear');
+  assert.equal(listGrants().length, 1);
+  assert.deepEqual(forgetGrantsOn('sock:1:100'), ['%3']);
+  assert.equal(listGrants().length, 0);
+  assert.equal(grantsServer(), null);
 });

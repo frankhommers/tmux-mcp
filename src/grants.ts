@@ -43,6 +43,23 @@ export function bindGrantsToServer(fingerprint: string): string[] {
   return dropped;
 }
 
+/** The tmux server the grants were made on, if any were. */
+export function grantsServer(): string | null {
+  return servedBy;
+}
+
+/**
+ * That tmux server is gone: drop everything made on it. Returns the ids
+ * dropped, empty when the grants belong to another server.
+ */
+export function forgetGrantsOn(fingerprint: string): string[] {
+  if (servedBy !== fingerprint) return [];
+  const dropped = [...grants.keys()];
+  grants.clear();
+  servedBy = null;
+  return dropped;
+}
+
 /**
  * Record a grant, saying which tmux server it was made on. The server is not
  * optional: a grant added before one was known would otherwise be adopted by

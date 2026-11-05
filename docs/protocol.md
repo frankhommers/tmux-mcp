@@ -10,7 +10,7 @@ own types and agree at runtime through `PROTOCOL_VERSION`.
 
 ## Version
 
-`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.7`**.
+`PROTOCOL_VERSION` is a string `"<major>.<minor>"`, currently **`1.8`**.
 
 - Equal majors connect. A higher minor on either side is fine: unknown
   message types and unknown fields are ignored.
@@ -41,7 +41,7 @@ First message on every connection. Dispatch answers `welcome` or `refuse`.
 ```json
 {
   "type": "hello",
-  "protocolVersion": "1.7",
+  "protocolVersion": "1.8",
   "agent": {
     "instanceId": "0f0d8f6c-6a1f-4a3e-9a02-2b0e2f9a1d77",
     "tmuxServer": "/private/tmp/tmux-501/default:16186:1788462695",
@@ -111,8 +111,11 @@ pane that exists when they answer, and the MCP server validates it then.
 
 `suggested` is an optional target the agent already has in mind, for instance
 because a human named it in the task. It is a hint shown next to the request:
-it grants nothing, is never matched automatically, and the human remains free
-to answer with something else.
+it grants nothing by itself, and the human remains free to answer with
+something else. A standing rule, however, may only answer such a request with
+the suggested target: a rule matching some other candidate leaves the request
+to the human, so an agent that asked for `%9` is never handed `%6` without
+anyone looking (dispatch 1.8; older dispatch ignored the suggestion).
 
 ### `candidates`
 
@@ -178,12 +181,33 @@ own grant, so a slow or absent dispatch cannot block work.
 { "type": "check", "id": "c-2f1a", "target": "%3" }
 ```
 
+### `tmux-gone` (1.8)
+
+The tmux server the agent's grants were made on is gone: its pid no longer
+runs, or a new server answers on the same socket. Sent once, when the MCP
+server notices.
+
+```json
+{ "type": "tmux-gone", "tmuxServer": "/private/tmp/tmux-501/default:6002:1793028578" }
+```
+
+A pane id only means something inside one server instance, so every
+assignment on it is void. Dispatch drops every grant, revocation and pin rule
+bound to that fingerprint on the reporter's machine — held by any agent,
+connected or not — rather than waiting for a newer server to connect. Other
+machines are untouched, even on the same socket path.
+
+Machines are compared by the first label of the reported host name, because
+macOS renames itself per network (`Franks-MBP16.local`,
+`Franks-MBP16.lan`); the restart cleanup and inventory validation compare the
+same way.
+
 ## Messages: dispatch → server
 
 ### `welcome`
 
 ```json
-{ "type": "welcome", "protocolVersion": "1.7", "account": "frankhommers" }
+{ "type": "welcome", "protocolVersion": "1.8", "account": "frankhommers" }
 ```
 
 ### `refuse`

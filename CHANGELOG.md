@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### A tmux server that is gone takes its assignments along
+
+- The server now notices on its own, within 30 seconds or at the next tmux
+  change, when the tmux server its grants were made on is gone: another server
+  answers on the socket, or nothing answers and its pid no longer runs. Every
+  grant made there is dropped at once rather than at the next action.
+- Protocol 1.8 tells dispatch with `tmux-gone`, so it clears every assignment
+  and pin rule on that server on this machine, also those of agents that are
+  no longer running. 1.7 peers ignore it.
+- A pane named with `suggest` is the only one a standing rule may hand over;
+  a rule matching another candidate leaves the request to the human.
+
 ## 0.4.0 — 2026-11-03
 
 ### Several agents in one directory

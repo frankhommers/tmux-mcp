@@ -661,3 +661,16 @@ test('a session id resolved lazily still reaches the hello', async () => {
     }
   });
 });
+
+test('a tmux server that is gone is reported to dispatch', async () => {
+  await withFakeUi(acceptHandshake, async ui => {
+    const agent = makeAgent(ui.url);
+    try {
+      agent.reportTmuxGone('/private/tmp/tmux-501/default:6002:1793028578');
+      const gone = await ui.waitFor('tmux-gone');
+      assert.equal(gone.tmuxServer, '/private/tmp/tmux-501/default:6002:1793028578');
+    } finally {
+      agent.stop();
+    }
+  });
+});

@@ -8,7 +8,7 @@
  */
 
 /** "<major>.<minor>". Same major connects; different major refuses. */
-export const PROTOCOL_VERSION = '1.7';
+export const PROTOCOL_VERSION = '1.8';
 
 export function protocolMajor(version: string): string {
   return version.split('.')[0] ?? '';
@@ -78,7 +78,9 @@ export type ServerToDispatch =
   | { type: 'grants'; grants: WireGrant[] }
   | { type: 'inventory-changed' }
   | { type: 'validation'; id: string; tmuxServer: string; missing: string[] }
-  | { type: 'check'; id: string; target: string };
+  | { type: 'check'; id: string; target: string }
+  /** 1.8: the tmux server this agent was on is gone; its ids mean nothing now. */
+  | { type: 'tmux-gone'; tmuxServer: string };
 
 export type DispatchToServer =
   | { type: 'welcome'; protocolVersion: string; account?: string }

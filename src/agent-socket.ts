@@ -88,6 +88,8 @@ export class AgentSocket {
   /** A grant report is owed to dispatch as soon as the handshake lands. */
   private reporting = false;
   private inventoryChanged = false;
+  /** Dead tmux servers dispatch has not been told about yet. */
+  private readonly goneServers = new Set<string>();
   private validating = 0;
   private lingerTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pendingChecks = new Map<string, (allowed: boolean) => void>();
@@ -138,6 +140,23 @@ export class AgentSocket {
     this.inventoryChanged = true;
     if (this.connected) this.flushInventoryChange();
     else this.ensureConnection();
+  }
+
+  /**
+   * Tell dispatch a tmux server is gone, so it drops every assignment made on
+   * it, including those of agents that are no longer around to say so.
+   */
+  reportTmuxGone(tmuxServer: string): void {
+    if (this.refused || this.closing) return;
+    this.goneServers.add(tmuxServer);
+    if (this.connected) this.flushTmuxGone();
+    else this.ensureConnection();
+  }
+
+  private flushTmuxGone(): void {
+    for (const tmuxServer of this.goneServers) this.send({ type: 'tmux-gone', tmuxServer });
+    this.goneServers.clear();
+    this.lingerThenHangUp();
   }
 
   private flushInventoryChange(): void {
@@ -274,7 +293,7 @@ export class AgentSocket {
       const wasHandshaken = this.handshaken;
       this.socket = null;
       this.handshaken = false;
-      if (this.closing || this.refused || (this.open.size === 0 && !this.reporting && !this.inventoryChanged)) return;
+      if (this.closing || this.refused || (this.open.size === 0 && !this.reporting && !this.inventoryChanged && this.goneServers.size === 0)) return;
       if (wasHandshaken) this.options.log('info', 'dispatch service connection lost, reconnecting');
       this.scheduleRetry();
     });
@@ -295,6 +314,7 @@ export class AgentSocket {
         // Re-offer everything: this may be a reconnect, and dispatch may have
         // restarted with an empty head since we last spoke.
         for (const request of this.open.values()) this.send({ type: 'request', ...request });
+        if (this.goneServers.size > 0) this.flushTmuxGone();
         this.flushGrants();
         if (this.options.onValidate) this.flushInventoryChange();
         return;
@@ -379,7 +399,8 @@ export class AgentSocket {
     if (this.lingerTimer) clearTimeout(this.lingerTimer);
     this.lingerTimer = setTimeout(() => {
       this.lingerTimer = null;
-      if (this.open.size === 0 && !this.reporting && !this.inventoryChanged && this.validating === 0) this.disconnect();
+      if (this.open.size === 0 && !this.reporting && !this.inventoryChanged && this.goneServers.size === 0
+        && this.validating === 0) this.disconnect();
     }, this.options.lingerMs ?? LINGER_MS);
     this.lingerTimer.unref?.();
   }
@@ -396,7 +417,7 @@ export class AgentSocket {
     this.backoff = Math.min(this.backoff * 2, BACKOFF_MAX_MS);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      if (this.open.size > 0 || this.reporting || this.inventoryChanged) this.ensureConnection();
+      if (this.open.size > 0 || this.reporting || this.inventoryChanged || this.goneServers.size > 0) this.ensureConnection();
     }, delay);
     this.retryTimer.unref?.();
   }
