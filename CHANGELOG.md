@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-11-05
 
 ### A tmux server that is gone takes its assignments along
 
